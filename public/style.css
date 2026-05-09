@@ -52,7 +52,7 @@ button, input, select { font-family: inherit; color: inherit; }
 /* ── Layout ───────────────────────────────────────────────────────────────── */
 
 .site-header {
-  height: 72px;
+  height: 56px;
   border-bottom: 1px solid var(--border);
   backdrop-filter: var(--glass);
   background: rgba(10, 10, 12, 0.8);
@@ -62,10 +62,10 @@ button, input, select { font-family: inherit; color: inherit; }
 }
 
 .header-inner {
-  max-width: 1400px;
+  max-width: 1200px;
   margin: 0 auto;
   height: 100%;
-  padding: 0 24px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -84,20 +84,21 @@ button, input, select { font-family: inherit; color: inherit; }
 .header-actions { display: flex; align-items: center; gap: 12px; }
 
 .layout {
-  max-width: 1400px;
-  margin: 24px auto;
-  padding: 0 24px;
+  max-width: 1200px;
+  margin: 16px auto;
+  padding: 0 12px;
 }
 
 /* ── Dashboard Layout ── */
 .dashboard {
+  /* Mobile-first: single column by default */
   display: grid;
-  grid-template-columns: 1fr 380px;
-  gap: 24px;
+  grid-template-columns: 1fr;
+  gap: 16px;
 }
 
-@media (max-width: 1100px) {
-  .dashboard { grid-template-columns: 1fr; }
+@media (min-width: 900px) {
+  .dashboard { grid-template-columns: 1fr 380px; gap: 24px; }
 }
 
 .dashboard-primary {
@@ -116,9 +117,9 @@ button, input, select { font-family: inherit; color: inherit; }
 }
 
 .hero-title {
-  font-size: 32px;
+  font-size: 20px;
   font-weight: 800;
-  letter-spacing: -1px;
+  letter-spacing: -0.5px;
 }
 
 .hero-badges {
@@ -140,12 +141,12 @@ button, input, select { font-family: inherit; color: inherit; }
 
 .viewport-main {
   display: grid;
-  grid-template-columns: 1.5fr 1fr;
-  min-height: 360px;
+  grid-template-columns: 1fr;
+  min-height: 260px;
 }
 
-@media (max-width: 900px) {
-  .viewport-main { grid-template-columns: 1fr; }
+@media (min-width: 900px) {
+  .viewport-main { grid-template-columns: 1.5fr 1fr; min-height: 360px; }
 }
 
 .preview-container {
@@ -175,25 +176,15 @@ button, input, select { font-family: inherit; color: inherit; }
 }
 
 .now-playing-hero {
-  padding: 32px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  background: linear-gradient(to right, rgba(0,0,0,0.4), transparent);
+  background: linear-gradient(to right, rgba(0,0,0,0.3), transparent);
 }
 
-.np-title-large {
-  font-size: 24px;
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-
-.np-artist-large {
-  font-size: 18px;
-  color: var(--primary-hover);
-  font-weight: 500;
-  margin-bottom: 24px;
-}
+.np-title-large { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.np-artist-large { font-size: 14px; color: var(--primary-hover); font-weight: 500; margin-bottom: 12px; }
 
 /* ── Stats Bar ── */
 .stream-stats-bar {

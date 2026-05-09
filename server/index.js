@@ -6,7 +6,7 @@ const { Server } = require('socket.io');
 const path       = require('path');
 const session    = require('express-session');
 const fs         = require('fs');
-const bcrypt     = require('bcryptjs');
+// bcrypt handled in auth module
 
 const db             = require('./db');
 const youtube        = require('./youtube');
@@ -43,24 +43,7 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
-let setupCompleted = false;
-
-const requireAuth = async (req, res, next) => {
-  if (req.session && req.session.authenticated) return next();
-  
-  if (!setupCompleted) {
-    const settings = await db.getSettings();
-    if (settings.ADMIN_PASSWORD) {
-      setupCompleted = true;
-    } else {
-      if (req.path.startsWith('/api/')) return res.status(401).json({ ok: false, error: 'Setup required' });
-      return res.redirect('/setup.html');
-    }
-  }
-
-  if (req.path.startsWith('/api/')) return res.status(401).json({ ok: false, error: 'Unauthorized' });
-  res.redirect('/login.html');
-};
+// auth.requireAuth used later in middleware
 
 // Public Assets
 app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
@@ -68,23 +51,12 @@ app.get('/setup.html', (req, res) => res.sendFile(path.join(__dirname, 'public',
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
-app.use(async (req, res, next) => {
-  const publics = ['/login.html', '/setup.html', '/style.css', '/privacy.html', '/privacy', '/terms.html', '/terms'];
-  if (publics.includes(req.path) || req.path.startsWith('/socket.io/')) return next();
-  try {
-    await requireAuth(req, res, next);
-  } catch (err) {
-    next(err);
-  }
-});
+// No authorization: serve static files and APIs without auth checks
 
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Socket.io Logic ──────────────────────────────────────────────────────────
-io.use((socket, next) => {
-  if (socket.request.session?.authenticated) return next();
-  next(new Error('Unauthorized'));
-});
+io.use((socket, next) => next());
 
 const sysLog = (entry) => io.emit('log:system', { time: new Date().toLocaleTimeString('en-GB'), ...entry });
 const streamLog = (entry) => io.emit('log:stream', { time: new Date().toLocaleTimeString('en-GB'), ...entry });
@@ -131,57 +103,7 @@ async function poll() {
 
 // ── REST API ──────────────────────────────────────────────────────────────────
 
-app.post('/api/login', async (req, res) => {
-  const { password } = req.body;
-  const settings = await db.getSettings();
-  const hash = settings.ADMIN_PASSWORD;
-
-  if (!hash) {
-    return res.status(400).json({ ok: false, error: 'Setup required' });
-  }
-
-  const match = await bcrypt.compare(password, hash);
-  console.log(`[AUTH] Login attempt. Match: ${match}`);
-
-  if (match) {
-    req.session.authenticated = true;
-    return res.json({ ok: true });
-  }
-  res.status(401).json({ ok: false, error: 'Invalid password' });
-});
-
-app.post('/api/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ ok: true });
-});
-
-app.get('/api/auth-status', async (req, res) => {
-  const settings = await db.getSettings();
-  res.json({ 
-    authenticated: !!req.session?.authenticated,
-    setupRequired: !settings.ADMIN_PASSWORD
-  });
-});
-
-app.post('/api/setup/admin', async (req, res) => {
-  const settings = await db.getSettings();
-  if (settings.ADMIN_PASSWORD) {
-    return res.status(403).json({ ok: false, error: 'Setup already completed' });
-  }
-
-  const { password } = req.body;
-  if (!password || password.length < 8) {
-    return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters' });
-  }
-
-  const hash = await bcrypt.hash(password, 10);
-  await db.updateSetting('ADMIN_PASSWORD', hash);
-  setupCompleted = true;
-  
-  // Auto-login after setup
-  req.session.authenticated = true;
-  res.json({ ok: true });
-});
+// Authentication removed: login/setup endpoints disabled
 
 app.get('/api/stations', async (req, res) => {
   try { res.json({ ok: true, data: await azura.getStations() }); }

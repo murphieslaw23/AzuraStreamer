@@ -83,15 +83,8 @@
       <h1 class="login-title">AzuraStreamer</h1>
       <p class="login-sub">Authorized Personnel Only</p>
       
-      <div id="login-error" class="error-msg"></div>
-
-      <form id="login-form">
-        <div class="form-group">
-          <label class="form-label" style="text-align: left;">System Password</label>
-          <input type="password" id="inp-password" class="form-input" placeholder="••••••••" required autofocus>
-        </div>
-        <button type="submit" class="btn btn--primary btn--full">Access Dashboard</button>
-      </form>
+      <p style="color: var(--text-muted); margin: 20px 0;">Authentication has been disabled on this instance. You can access the dashboard directly.</p>
+      <a href="/" class="btn btn--primary btn--full">Go to Dashboard</a>
 
       <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; gap: 20px;">
         <a href="/privacy.html" style="color: var(--text-dim); text-decoration: none; font-size: 12px; font-weight: 500; transition: color 0.2s;">Privacy Policy</a>
@@ -100,42 +93,8 @@
     </div>
   </div>
 
-  <script>
-    const form = document.getElementById('login-form');
-    const errDiv = document.getElementById('login-error');
-    const $ = (s) => document.querySelector(s);
-
-    // Check if setup is needed
-    fetch('/api/auth-status').then(r => r.json()).then(data => {
-      if (data.setupRequired) window.location.href = '/setup.html';
-    });
-
-    $('#login-form').onsubmit = async (e) => {
-      e.preventDefault();
-      errDiv.style.display = 'none';
-      const inpPass = document.getElementById('inp-password');
-      
-      try {
-        const resp = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: inpPass.value })
-        });
-        
-        const data = await resp.json();
-        if (data.ok) {
-          window.location.href = '/';
-        } else {
-          errDiv.textContent = data.error || 'Login failed';
-          errDiv.style.display = 'block';
-          inpPass.value = '';
-          inpPass.focus();
-        }
-      } catch (err) {
-        errDiv.textContent = 'Connection error. Is the server running?';
-        errDiv.style.display = 'block';
-      }
-    };
-  </script>
+    <script>
+      // Informational page only — no auth logic.
+    </script>
 </body>
 </html>

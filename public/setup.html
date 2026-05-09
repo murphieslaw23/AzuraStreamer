@@ -43,57 +43,12 @@
     <h1>Welcome</h1>
     <p>Please set your administrator password to initialize the application.</p>
     
-    <form id="setup-form">
-      <div class="form-group">
-        <label class="form-label">Admin Password</label>
-        <input id="inp-password" type="password" class="form-input" placeholder="Min 8 characters" required minlength="8" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Confirm Password</label>
-        <input id="inp-confirm" type="password" class="form-input" placeholder="Repeat your password" required minlength="8" />
-      </div>
-      <div id="setup-error" class="badge badge--error" style="width: 100%; margin-bottom: 20px; justify-content: center;" hidden></div>
-      <button type="submit" class="btn btn--primary btn--full">Complete Setup</button>
-    </form>
+    <p style="color: var(--text-muted); margin: 20px 0;">Setup and authentication have been removed for this instance. Visit the dashboard to configure integrations directly.</p>
+    <a href="/" class="btn btn--primary btn--full">Go to Dashboard</a>
   </div>
 
   <script>
-    const $ = (s) => document.querySelector(s);
-
-    // Initial check: if setup not required, go to login
-    fetch('/api/auth-status').then(r => r.json()).then(data => {
-      if (!data.setupRequired) window.location.href = '/login.html';
-    });
-
-    $('#setup-form').onsubmit = async (e) => {
-      e.preventDefault();
-      const pass = $('#inp-password').value;
-      const conf = $('#inp-confirm').value;
-
-      if (pass !== conf) {
-        $('#setup-error').textContent = 'Passwords do not match';
-        $('#setup-error').hidden = false;
-        return;
-      }
-
-      try {
-        const res = await fetch('/api/setup/admin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: pass })
-        }).then(r => r.json());
-        
-        if (res.ok) {
-          window.location.href = '/';
-        } else {
-          $('#setup-error').textContent = res.error || 'Setup failed';
-          $('#setup-error').hidden = false;
-        }
-      } catch (err) {
-        $('#setup-error').textContent = 'Connection error';
-        $('#setup-error').hidden = false;
-      }
-    };
+    // Setup page no longer required — informational only.
   </script>
 </body>
 </html>
