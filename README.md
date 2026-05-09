@@ -123,6 +123,9 @@ docker compose up -d --build
 
 # Container shell
 docker exec -it azurastreamer bash
+
+# Uninstall AzuraStreamer
+sudo ./uninstall.sh
 ```
 
 ---
