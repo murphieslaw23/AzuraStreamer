@@ -43,8 +43,21 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
-const requireAuth = (req, res, next) => {
+let setupCompleted = false;
+
+const requireAuth = async (req, res, next) => {
   if (req.session && req.session.authenticated) return next();
+  
+  if (!setupCompleted) {
+    const settings = await db.getSettings();
+    if (settings.ADMIN_PASSWORD) {
+      setupCompleted = true;
+    } else {
+      if (req.path.startsWith('/api/')) return res.status(401).json({ ok: false, error: 'Setup required' });
+      return res.redirect('/setup.html');
+    }
+  }
+
   if (req.path.startsWith('/api/')) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   res.redirect('/login.html');
 };
@@ -55,10 +68,14 @@ app.get('/setup.html', (req, res) => res.sendFile(path.join(__dirname, 'public',
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const publics = ['/login.html', '/setup.html', '/style.css', '/privacy.html', '/privacy', '/terms.html', '/terms'];
   if (publics.includes(req.path) || req.path.startsWith('/socket.io/')) return next();
-  requireAuth(req, res, next);
+  try {
+    await requireAuth(req, res, next);
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -159,6 +176,7 @@ app.post('/api/setup/admin', async (req, res) => {
 
   const hash = await bcrypt.hash(password, 10);
   await db.updateSetting('ADMIN_PASSWORD', hash);
+  setupCompleted = true;
   
   // Auto-login after setup
   req.session.authenticated = true;
