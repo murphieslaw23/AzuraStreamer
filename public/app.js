@@ -36,7 +36,13 @@ const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 async function apiFetch(url, options = {}) {
   const resp = await fetch(url, options);
   if (resp.status === 401) {
-    window.location.href = '/login.html';
+    // Check if setup is needed before redirecting to login
+    const auth = await fetch('/api/auth-status').then(r => r.json());
+    if (auth.setupRequired) {
+      window.location.href = '/setup.html';
+    } else {
+      window.location.href = '/login.html';
+    }
     throw new Error('Unauthorized');
   }
   return resp;
@@ -148,12 +154,18 @@ function updateDashboard() {
 
 async function loadInitialData() {
   try {
-    const [stRes, npRes, strRes, setRes] = await Promise.all([
+    const [stRes, npRes, strRes, setRes, authRes] = await Promise.all([
       apiFetch('/api/stations').then(r => r.json()),
       apiFetch('/api/nowplaying').then(r => r.json()),
       apiFetch('/api/streams').then(r => r.json()),
-      apiFetch('/api/settings').then(r => r.json())
+      apiFetch('/api/settings').then(r => r.json()),
+      apiFetch('/api/auth-status').then(r => r.json())
     ]);
+
+    if (authRes.setupRequired) {
+      window.location.href = '/setup.html';
+      return;
+    }
 
     const npMap = {};
     if (npRes.ok) npRes.data.forEach(item => {

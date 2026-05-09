@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const path       = require('path');
 const session    = require('express-session');
 const fs         = require('fs');
+const bcrypt     = require('bcryptjs');
 
 const db             = require('./db');
 const youtube        = require('./youtube');
@@ -29,6 +30,7 @@ let CFG = {
 };
 
 // ── Middlewares ───────────────────────────────────────────────────────────────
+app.set('trust proxy', 1);
 app.use(express.json());
 
 const sessionMiddleware = session({
@@ -49,9 +51,13 @@ const requireAuth = (req, res, next) => {
 
 // Public Assets
 app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+app.get('/setup.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'setup.html')));
+app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
+app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 
 app.use((req, res, next) => {
-  if (['/login.html', '/style.css'].includes(req.path) || req.path.startsWith('/socket.io/')) return next();
+  const publics = ['/login.html', '/setup.html', '/style.css', '/privacy.html', '/privacy', '/terms.html', '/terms'];
+  if (publics.includes(req.path) || req.path.startsWith('/socket.io/')) return next();
   requireAuth(req, res, next);
 });
 
@@ -111,7 +117,16 @@ async function poll() {
 app.post('/api/login', async (req, res) => {
   const { password } = req.body;
   const settings = await db.getSettings();
-  if (password === settings.ADMIN_PASSWORD) {
+  const hash = settings.ADMIN_PASSWORD;
+
+  if (!hash) {
+    return res.status(400).json({ ok: false, error: 'Setup required' });
+  }
+
+  const match = await bcrypt.compare(password, hash);
+  console.log(`[AUTH] Login attempt. Match: ${match}`);
+
+  if (match) {
     req.session.authenticated = true;
     return res.json({ ok: true });
   }
@@ -123,7 +138,32 @@ app.post('/api/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/auth-status', (req, res) => res.json({ authenticated: !!req.session?.authenticated }));
+app.get('/api/auth-status', async (req, res) => {
+  const settings = await db.getSettings();
+  res.json({ 
+    authenticated: !!req.session?.authenticated,
+    setupRequired: !settings.ADMIN_PASSWORD
+  });
+});
+
+app.post('/api/setup/admin', async (req, res) => {
+  const settings = await db.getSettings();
+  if (settings.ADMIN_PASSWORD) {
+    return res.status(403).json({ ok: false, error: 'Setup already completed' });
+  }
+
+  const { password } = req.body;
+  if (!password || password.length < 8) {
+    return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters' });
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+  await db.updateSetting('ADMIN_PASSWORD', hash);
+  
+  // Auto-login after setup
+  req.session.authenticated = true;
+  res.json({ ok: true });
+});
 
 app.get('/api/stations', async (req, res) => {
   try { res.json({ ok: true, data: await azura.getStations() }); }

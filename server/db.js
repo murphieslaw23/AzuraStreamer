@@ -68,8 +68,7 @@ class Database {
       'DEFAULT_STREAM_TITLE'  : 'AzuraStreamer Live',
       'DEFAULT_STREAM_DESC'   : 'Live stream from AzuraCast via AzuraStreamer',
       'DEFAULT_STREAM_VISIBILITY': 'public',
-      'DEFAULT_TEMPLATE': '3',
-      'ADMIN_PASSWORD': 'azura'
+      'DEFAULT_TEMPLATE': '3'
     };
 
     for (const [key, val] of Object.entries(defaults)) {

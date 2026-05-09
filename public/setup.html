@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Setup — AzuraStreamer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: radial-gradient(circle at top left, #1a1a2e, #16213e, #0f3460);
+      overflow: hidden;
+    }
+    .setup-card {
+      width: 100%;
+      max-width: 440px;
+      padding: 50px;
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 24px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      animation: fadeIn 0.6s ease-out;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; justify-content: center; }
+    .logo-text { font-size: 24px; font-weight: 800; letter-spacing: -0.5px; color: #fff; }
+    h1 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; text-align: center; }
+    p { color: rgba(255, 255, 255, 0.5); text-align: center; margin-bottom: 32px; font-size: 15px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="setup-card">
+    <div class="logo">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 2v20M17 5H7M19 12H5M17 19H7"/></svg>
+      <span class="logo-text">AzuraStreamer</span>
+    </div>
+    <h1>Welcome</h1>
+    <p>Please set your administrator password to initialize the application.</p>
+    
+    <form id="setup-form">
+      <div class="form-group">
+        <label class="form-label">Admin Password</label>
+        <input id="inp-password" type="password" class="form-input" placeholder="Min 8 characters" required minlength="8" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm Password</label>
+        <input id="inp-confirm" type="password" class="form-input" placeholder="Repeat your password" required minlength="8" />
+      </div>
+      <div id="setup-error" class="badge badge--error" style="width: 100%; margin-bottom: 20px; justify-content: center;" hidden></div>
+      <button type="submit" class="btn btn--primary btn--full">Complete Setup</button>
+    </form>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+
+    // Initial check: if setup not required, go to login
+    fetch('/api/auth-status').then(r => r.json()).then(data => {
+      if (!data.setupRequired) window.location.href = '/login.html';
+    });
+
+    $('#setup-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const pass = $('#inp-password').value;
+      const conf = $('#inp-confirm').value;
+
+      if (pass !== conf) {
+        $('#setup-error').textContent = 'Passwords do not match';
+        $('#setup-error').hidden = false;
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/setup/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pass })
+        }).then(r => r.json());
+        
+        if (res.ok) {
+          window.location.href = '/';
+        } else {
+          $('#setup-error').textContent = res.error || 'Setup failed';
+          $('#setup-error').hidden = false;
+        }
+      } catch (err) {
+        $('#setup-error').textContent = 'Connection error';
+        $('#setup-error').hidden = false;
+      }
+    };
+  </script>
+</body>
+</html>

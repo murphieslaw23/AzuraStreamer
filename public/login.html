@@ -92,17 +92,28 @@
         </div>
         <button type="submit" class="btn btn--primary btn--full">Access Dashboard</button>
       </form>
+
+      <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; gap: 20px;">
+        <a href="/privacy.html" style="color: var(--text-dim); text-decoration: none; font-size: 12px; font-weight: 500; transition: color 0.2s;">Privacy Policy</a>
+        <a href="/terms.html" style="color: var(--text-dim); text-decoration: none; font-size: 12px; font-weight: 500; transition: color 0.2s;">Terms of Use</a>
+      </div>
     </div>
   </div>
 
   <script>
     const form = document.getElementById('login-form');
     const errDiv = document.getElementById('login-error');
-    const inpPass = document.getElementById('inp-password');
+    const $ = (s) => document.querySelector(s);
 
-    form.onsubmit = async (e) => {
+    // Check if setup is needed
+    fetch('/api/auth-status').then(r => r.json()).then(data => {
+      if (data.setupRequired) window.location.href = '/setup.html';
+    });
+
+    $('#login-form').onsubmit = async (e) => {
       e.preventDefault();
       errDiv.style.display = 'none';
+      const inpPass = document.getElementById('inp-password');
       
       try {
         const resp = await fetch('/api/login', {
