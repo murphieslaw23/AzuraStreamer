@@ -1,0 +1,5 @@
+node_modules/
+data/
+*.log
+azura_logs_24h.txt
+.env

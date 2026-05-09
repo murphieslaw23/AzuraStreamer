@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login — AzuraStreamer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    .login-container {
+      width: 100%;
+      max-width: 400px;
+      padding: 20px;
+      animation: fadeIn 0.6s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .login-card {
+      background: var(--bg-panel);
+      backdrop-filter: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 40px;
+      box-shadow: var(--shadow);
+      text-align: center;
+    }
+    .login-logo {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 24px;
+    }
+    .login-title {
+      font-size: 24px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .login-sub {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 32px;
+    }
+    .error-msg {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+      padding: 10px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      margin-bottom: 20px;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-logo">
+        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="16" cy="16" r="14" stroke="url(#gr1)" stroke-width="2.5"/>
+          <circle cx="16" cy="16" r="5" fill="url(#gr2)"/>
+          <defs>
+            <linearGradient id="gr1" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#7c3aed"/><stop offset="100%" stop-color="#2563eb"/>
+            </linearGradient>
+            <radialGradient id="gr2" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#7c3aed"/>
+            </radialGradient>
+          </defs>
+        </svg>
+      </div>
+      <h1 class="login-title">AzuraStreamer</h1>
+      <p class="login-sub">Authorized Personnel Only</p>
+      
+      <div id="login-error" class="error-msg"></div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label class="form-label" style="text-align: left;">System Password</label>
+          <input type="password" id="inp-password" class="form-input" placeholder="••••••••" required autofocus>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full">Access Dashboard</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const errDiv = document.getElementById('login-error');
+    const inpPass = document.getElementById('inp-password');
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      errDiv.style.display = 'none';
+      
+      try {
+        const resp = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: inpPass.value })
+        });
+        
+        const data = await resp.json();
+        if (data.ok) {
+          window.location.href = '/';
+        } else {
+          errDiv.textContent = data.error || 'Login failed';
+          errDiv.style.display = 'block';
+          inpPass.value = '';
+          inpPass.focus();
+        }
+      } catch (err) {
+        errDiv.textContent = 'Connection error. Is the server running?';
+        errDiv.style.display = 'block';
+      }
+    };
+  </script>
+</body>
+</html>

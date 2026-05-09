@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AzuraStreamer — Live Control</title>
+  <meta name="description" content="Stream AzuraCast radio stations live to YouTube and Twitch with one click." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── Toast container ── -->
+<div id="toasts" aria-live="polite"></div>
+
+<!-- ── Header ── -->
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="16" cy="16" r="14" stroke="url(#gr1)" stroke-width="2.5"/>
+          <circle cx="16" cy="16" r="5" fill="url(#gr2)"/>
+          <defs>
+            <linearGradient id="gr1" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#7c3aed"/><stop offset="100%" stop-color="#2563eb"/>
+            </linearGradient>
+            <radialGradient id="gr2" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#7c3aed"/>
+            </radialGradient>
+          </defs>
+        </svg>
+      </div>
+      <div>
+        <h1 class="brand-name">AzuraStreamer</h1>
+        <p class="brand-sub">Premium Live Bridge</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="connection-badge" class="badge badge--connecting">
+        <span class="dot"></span> <span class="badge-text">Connecting…</span>
+      </div>
+      <button id="btn-settings" class="btn btn--ghost btn--sm">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2v-.44a2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+      <button id="btn-refresh" class="btn btn--ghost btn--sm">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      </button>
+      <button id="btn-logout" class="btn btn--ghost btn--sm" title="Logout">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main class="layout dashboard">
+  
+  <!-- Dashboard: Left Side (Live Status & Media) -->
+  <div class="dashboard-primary">
+    <!-- Station Identity -->
+    <header class="station-hero">
+      <div class="station-meta">
+        <h2 id="station-name-display" class="hero-title">Loading Station...</h2>
+        <div class="hero-badges">
+          <div id="station-online-badge" class="chip chip--online" hidden>ONLINE</div>
+          <div id="station-live-badge" class="live-badge" hidden>
+            <span class="dot dot--red"></span> LIVE
+          </div>
+          <div class="listener-count">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+            <span id="listener-num-display">0</span>
+          </div>
+        </div>
+      </div>
+      <div id="stream-status-banner" class="stream-status-label" hidden></div>
+    </header>
+
+    <!-- Main Viewport (Preview & Now Playing) -->
+    <section class="media-viewport">
+      <div class="viewport-main">
+        <div class="preview-container">
+          <img id="art-img-display" class="art-img-bg" src="" alt="" />
+          <div id="preview-overlay" class="stream-preview" hidden>
+            <img id="preview-img-display" class="preview-img" src="" alt="Live Preview" />
+            <div class="preview-overlay-text">LIVE FEED</div>
+          </div>
+        </div>
+        
+        <div class="now-playing-hero">
+          <div class="np-label">NOW PLAYING</div>
+          <h3 id="np-title-display" class="np-title-large">—</h3>
+          <p id="np-artist-display" class="np-artist-large">—</p>
+          <div class="np-progress-wrap">
+            <div class="np-progress-bar"><div id="np-fill-display" class="np-progress-fill"></div></div>
+            <span id="np-time-display" class="np-time"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Footer -->
+      <div id="stream-stats-container" class="stream-stats-bar" hidden>
+        <div class="stat-box">
+          <div class="stat-label">UPTIME</div>
+          <div id="stat-uptime" class="stat-value">00:00:00</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">BITRATE</div>
+          <div id="stat-bitrate" class="stat-value">0k</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">FPS</div>
+          <div id="stat-fps" class="stat-value">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">SPEED</div>
+          <div id="stat-speed" class="stat-value">0x</div>
+        </div>
+      </div>
+    </section>
+    
+    <!-- System Logs -->
+    <section class="card log-card">
+      <div class="card-header" style="padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+        <h3 class="panel-title" style="font-size: 13px;">System Logs</h3>
+        <button id="btn-clear-logs" class="btn btn--ghost btn--sm" style="padding: 2px 8px; font-size: 10px;">Clear</button>
+      </div>
+      <div id="log-display" class="log-viewport">
+        <div class="log-line log-line--info">System initialized. Ready to stream.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Dashboard: Right Side (Controls & Settings) -->
+  <aside class="dashboard-sidebar">
+    <div class="card control-card">
+      <div class="card-header">
+        <h3 class="panel-title">Stream Control</h3>
+      </div>
+      <div class="card-body">
+        <form id="stream-form">
+          <!-- Hidden station select (auto-filled) -->
+          <input type="hidden" id="sel-station" value="" />
+
+          <div class="form-group">
+            <label class="form-label">Broadcast Platform</label>
+            <div class="platform-picker">
+              <label class="platform-btn">
+                <input type="radio" name="platform" value="youtube" checked />
+                YouTube
+              </label>
+              <label class="platform-btn">
+                <input type="radio" name="platform" value="twitch" />
+                Twitch
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: -8px; margin-bottom: 24px;">
+            <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); cursor: pointer;">
+              <input type="checkbox" id="chk-manual-key" style="accent-color: var(--primary);" />
+              Use Manual Stream Key
+            </label>
+            <div id="manual-key-wrap" style="margin-top: 12px; display: none; animation: slideDown 0.3s ease;">
+              <input id="inp-manual-key" type="password" class="form-input" placeholder="Enter manual stream key..." />
+            </div>
+          </div>
+
+          <div class="metadata-section">
+            <div class="form-group">
+              <label class="form-label">Stream Title</label>
+              <input id="inp-stream-title" type="text" class="form-input" placeholder="Live Stream Title" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Description</label>
+              <textarea id="inp-stream-desc" class="form-input" style="min-height: 80px; resize: vertical;" placeholder="Live Stream Description"></textarea>
+            </div>
+            <div class="form-group" id="yt-visibility-group">
+              <label class="form-label">Visibility</label>
+              <select id="sel-visibility" class="form-select">
+                <option value="public">Public</option>
+                <option value="unlisted">Unlisted</option>
+                <option value="private">Private</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Visual Template</label>
+              <select id="sel-template" class="form-select">
+                <option value="1">1. Minimal Bottom-Left</option>
+                <option value="2">2. Centered Harmonic</option>
+                <option value="3">3. Industrial (Default)</option>
+                <option value="4">4. Spinning Vinyl</option>
+              </select>
+            </div>
+          </div>
+
+
+          <div id="action-buttons">
+            <button type="submit" id="btn-start" class="btn btn--primary btn--full">
+              Go Live Now
+            </button>
+            <button type="button" id="btn-stop" class="btn btn--danger btn--full" hidden>
+              Stop Broadcast
+            </button>
+            <a id="link-stream" href="#" target="_blank" class="btn btn--ghost btn--full" style="margin-top: 8px; text-decoration: none;" hidden>
+              Watch Live Stream ↗
+            </a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- ── Settings Modal ── -->
+<div id="settings-modal" class="modal-overlay">
+  <div class="modal">
+    <div class="panel-header">
+      <h2 class="panel-title">System Settings</h2>
+      <button class="btn btn--ghost btn--sm btn-close-modal">&times;</button>
+    </div>
+    <form id="settings-form">
+      <div class="form-group">
+        <label class="form-label">AzuraCast API URL</label>
+        <input name="AZURACAST_API_URL" type="url" class="form-input" required />
+      </div>
+      <div class="form-group">
+        <label class="form-label">AzuraCast API Key</label>
+        <div style="display: flex; gap: 8px;">
+          <input name="AZURACAST_API_KEY" type="text" class="form-input" style="flex: 1;" required />
+          <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="azuracast">Test</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">YouTube RTMP URL</label>
+        <input name="YOUTUBE_RTMP_URL" type="text" class="form-input" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Twitch RTMP URL</label>
+        <input name="TWITCH_RTMP_URL" type="text" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Default Stream Title</label>
+        <input name="DEFAULT_STREAM_TITLE" type="text" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Default Stream Description</label>
+        <textarea name="DEFAULT_STREAM_DESC" class="form-input" style="min-height: 60px;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Default Visibility (YouTube)</label>
+        <select name="DEFAULT_STREAM_VISIBILITY" class="form-select">
+          <option value="public">Public</option>
+          <option value="unlisted">Unlisted</option>
+          <option value="private">Private</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Default Visual Template</label>
+        <select name="DEFAULT_TEMPLATE" class="form-select">
+          <option value="1">1. Minimal Bottom-Left</option>
+          <option value="2">2. Centered Harmonic</option>
+          <option value="3">3. Industrial (Default)</option>
+          <option value="4">4. Spinning Vinyl</option>
+        </select>
+      </div>
+
+      <!-- YouTube Setup -->
+      <div class="form-group" style="background: rgba(124, 58, 237, 0.05); padding: 16px; border-radius: var(--radius-sm); border: 1px solid rgba(124, 58, 237, 0.1); margin-bottom: 24px;">
+        <label class="form-label" style="color: var(--primary-hover); display: flex; align-items: center; gap: 8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
+          YouTube API Setup Guide
+        </label>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: flex; flex-direction: column; gap: 8px;">
+          <p>1. Enable <strong>YouTube Data API v3</strong> in Google Cloud Console.</p>
+          <p>2. Add this <strong>Authorized Redirect URI</strong> to your OAuth 2.0 Client ID:</p>
+          <div style="display: flex; gap: 8px; background: #000; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
+            <code class="display-redirect-uri" data-platform="youtube" style="flex: 1; color: var(--success); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Loading...</code>
+            <button type="button" class="btn-copy-uri" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 10px; font-weight: 700;">COPY</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">YouTube Client ID</label>
+        <input name="YT_CLIENT_ID" type="text" class="form-input" placeholder="000000000000-xxxx.apps.googleusercontent.com" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">YouTube Client Secret</label>
+        <input name="YT_CLIENT_SECRET" type="password" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">YouTube Refresh Token</label>
+        <div style="display: flex; gap: 8px;">
+          <input name="YT_REFRESH_TOKEN" type="password" class="form-input" style="flex: 1;" readonly placeholder="Not connected" />
+          <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="youtube" style="padding: 6px 10px;">Test</button>
+          <button type="button" id="btn-connect-yt" class="btn btn--yt btn--sm">Connect Account</button>
+        </div>
+      </div>
+
+      <hr style="border: 0; border-top: 1px solid var(--border); margin: 24px 0;" />
+
+      <!-- Twitch Setup -->
+      <div class="form-group" style="background: rgba(145, 70, 255, 0.05); padding: 16px; border-radius: var(--radius-sm); border: 1px solid rgba(145, 70, 255, 0.1); margin-bottom: 24px;">
+        <label class="form-label" style="color: #a970ff; display: flex; align-items: center; gap: 8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"/></svg>
+          Twitch API Setup Guide
+        </label>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: flex; flex-direction: column; gap: 8px;">
+          <p>1. Create app at <a href="https://dev.twitch.tv/console" target="_blank" style="color: var(--primary);">Twitch Dev Console</a>.</p>
+          <p>2. Add this <strong>OAuth Redirect URL</strong>:</p>
+          <div style="display: flex; gap: 8px; background: #000; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
+            <code class="display-redirect-uri" data-platform="twitch" style="flex: 1; color: var(--success); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Loading...</code>
+            <button type="button" class="btn-copy-uri" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 10px; font-weight: 700;">COPY</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Twitch Client ID</label>
+        <input name="TWITCH_CLIENT_ID" type="text" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Twitch Client Secret</label>
+        <input name="TWITCH_CLIENT_SECRET" type="password" class="form-input" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Twitch Stream Key</label>
+        <div style="display: flex; gap: 8px;">
+          <input name="TWITCH_STREAM_KEY" type="password" class="form-input" style="flex: 1;" readonly placeholder="Not connected" />
+          <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="twitch" style="padding: 6px 10px;">Test</button>
+          <button type="button" id="btn-connect-tw" class="btn btn--tw btn--sm">Connect Account</button>
+        </div>
+      </div>
+      <div class="btn-group" style="display: flex; gap: 12px; margin-top: 24px;">
+        <button type="submit" class="btn btn--primary btn--full">Save Settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── Templates ── -->
+
+<template id="tpl-station">
+  <article class="station-card">
+    <div class="station-card__art">
+      <img class="art-img" src="" alt="Album art" />
+      <div class="stream-preview" hidden>
+        <img class="preview-img" src="" alt="Live Preview" />
+        <div class="preview-overlay">LIVE PREVIEW</div>
+      </div>
+      <div class="live-badge" hidden>
+        <span class="dot dot--red"></span> LIVE
+      </div>
+    </div>
+    <div class="station-card__body">
+      <h3 class="station-name"></h3>
+      <p class="station-desc"></p>
+      
+      <div class="stream-status-label" hidden></div>
+
+      <div class="now-playing">
+        <div class="np-label">NOW PLAYING</div>
+        <div class="np-artist"></div>
+        <div class="np-title"></div>
+        <div class="np-progress-wrap">
+          <div class="np-progress-bar"><div class="np-progress-fill"></div></div>
+          <span class="np-time"></span>
+        </div>
+      </div>
+
+      <!-- Stream Stats Section -->
+      <div class="stream-stats" hidden>
+        <div class="stream-info-grid">
+          <div class="stat-box">
+            <div class="stat-label">UPTIME</div>
+            <div class="stat-value uptime">00:00:00</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">BITRATE</div>
+            <div class="stat-value bitrate">0k</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">FPS</div>
+            <div class="stat-value fps">0</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">SPEED</div>
+            <div class="stat-value speed">0x</div>
+          </div>
+        </div>
+        <button class="btn btn--danger btn--sm btn--full btn-stop-stream" style="margin-top: 12px;">Stop Stream</button>
+      </div>
+
+      <div class="station-footer">
+        <div class="listener-count">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          <span class="listener-num">0</span>
+        </div>
+        <div class="stream-actions" style="display: flex; gap: 8px;">
+          <button class="btn btn--yt btn--sm btn-stream-yt">YT</button>
+          <button class="btn btn--tw btn--sm btn-stream-tw">TW</button>
+        </div>
+      </div>
+    </div>
+  </article>
+</template>
+
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

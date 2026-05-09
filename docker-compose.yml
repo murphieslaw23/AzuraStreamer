@@ -1,0 +1,39 @@
+services:
+  azurastreamer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: azurastreamer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: "production"
+    volumes:
+      # Persist stream temp data outside the container
+      - azurastreamer_tmp:/tmp/azurastreamer
+      # Persist database
+      - ./data:/app/data
+    # Allow ffmpeg to spawn child processes
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: [ "CMD", "node", "-e", "require('http').get('http://localhost:3000/api/stations', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  azurastreamer_tmp:
+    driver: local
