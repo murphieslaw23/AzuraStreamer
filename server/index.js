@@ -13,6 +13,7 @@ const youtube        = require('./youtube');
 const twitch         = require('./twitch');
 const AzuraClient    = require('./azuraClient');
 const StreamManager  = require('./streamManager');
+const { validateStreamStart } = require('./validator');
 
 // ── App Setup ─────────────────────────────────────────────────────────────────
 const app    = express();
@@ -22,6 +23,8 @@ const io     = new Server(server, { cors: { origin: '*' } });
 // ── Globals ───────────────────────────────────────────────────────────────────
 let azura;
 let streamer;
+let settings = {};  // Cached settings
+let streamCreationLock = new Map(); // For atomic duplicate checking
 let CFG = {
   PORT              : parseInt(process.env.PORT || '3000', 10),
   STREAMS_DIR       : path.join(__dirname, 'data', 'streams'),
@@ -120,56 +123,118 @@ app.get('/api/streams', (req, res) => res.json({ ok: true, data: streamer.getAll
 app.post('/api/streams/start', async (req, res) => {
   let { stationId, stationName, stationShortcode, listenUrl, platform, title, description, privacyStatus, template, manualStreamKey } = req.body;
   
-  const stationIdInt = parseInt(stationId, 10);
-  const existing = streamer.getAllSummaries().find(s => s.stationId === stationIdInt && s.platform === platform && s.status !== 'stopped');
-  if (existing) return res.status(409).json({ ok: false, error: 'Station already streaming to this platform' });
-
   try {
-    let streamKey = manualStreamKey;
-    let streamUrl = null;
+    // 1. INPUT VALIDATION
+    validateStreamStart({ stationId, stationName, listenUrl, platform, template, manualStreamKey, title, privacyStatus });
 
-    if (!streamKey) {
-      if (platform === 'youtube') {
-        const result = await youtube.createBroadcast(title, description, privacyStatus);
-        streamKey = result.streamKey;
-        streamUrl = `https://youtu.be/${result.broadcastId}`;
+    const stationIdInt = parseInt(stationId, 10);
+    
+    // 2. ATOMIC DUPLICATE CHECK (prevent race condition)
+    const lockKey = `${stationIdInt}:${platform}`;
+    if (streamCreationLock.has(lockKey)) {
+      return res.status(409).json({ ok: false, error: 'Stream creation in progress for this platform' });
+    }
+    
+    const existing = streamer.getAllSummaries().find(s => s.stationId === stationIdInt && s.platform === platform && s.status !== 'stopped');
+    if (existing) return res.status(409).json({ ok: false, error: 'Station already streaming to this platform' });
+    
+    // Acquire lock
+    streamCreationLock.set(lockKey, true);
+
+    try {
+      let streamKey = manualStreamKey;
+      let streamUrl = null;
+
+      // 3. GET PLATFORM CREDENTIALS (with timeout)
+      if (!streamKey) {
+        try {
+          if (platform === 'youtube') {
+            const result = await Promise.race([
+              youtube.createBroadcast(title, description, privacyStatus),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('YouTube API timeout')), 15000))
+            ]);
+            streamKey = result.streamKey;
+            streamUrl = `https://youtu.be/${result.broadcastId}`;
+          } else {
+            const twitchInfo = await Promise.race([
+              twitch.getStreamKey(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Twitch API timeout')), 15000))
+            ]);
+            streamKey = twitchInfo.streamKey;
+            streamUrl = `https://twitch.tv/${twitchInfo.username}`;
+          }
+        } catch (apiErr) {
+          return res.status(502).json({ ok: false, error: `Platform API error: ${apiErr.message}` });
+        }
       } else {
-        const twitchInfo = await twitch.getStreamKey();
-        streamKey = twitchInfo.streamKey;
-        streamUrl = `https://twitch.tv/${twitchInfo.username}`;
+        streamUrl = platform === 'youtube' ? 'https://youtube.com/live_dashboard' : 'https://twitch.tv';
       }
-    } else {
-      streamUrl = platform === 'youtube' ? 'https://youtube.com/live_dashboard' : 'https://twitch.tv';
-    }
 
-    const rtmpBase = platform === 'youtube' ? (await db.getSettings()).YOUTUBE_RTMP_URL : (await db.getSettings()).TWITCH_RTMP_URL;
-    const info = await streamer.startStream({
-      stationId: stationIdInt, stationName, stationShortcode, listenUrl,
-      platform, streamKey, rtmpUrl: `${rtmpBase}/${streamKey}`, template, streamUrl
-    });
-
-    // Initial metadata fetch
-    const npData = await azura.getNowPlaying();
-    const np = npData.find(d => d.station.id === stationIdInt);
-    let artUrl = null;
-    if (np) {
-      const song = np.now_playing?.song || {};
-      artUrl = song.art || null;
-      info.currentSong = { artist: song.artist, title: song.title };
-      const nextSong = np.playing_next?.song;
-      await streamer.writeMeta(info.dataDir, {
-        artist: song.artist || '', title: song.title || '',
-        next: nextSong ? `${nextSong.artist} - ${nextSong.title}` : ''
+      // 4. CREATE STREAM ENTRY (atomic)
+      const rtmpBase = platform === 'youtube' ? settings.YOUTUBE_RTMP_URL : settings.TWITCH_RTMP_URL;
+      const info = await streamer.startStream({
+        stationId: stationIdInt, stationName, stationShortcode, listenUrl,
+        platform, streamKey, rtmpUrl: `${rtmpBase}/${streamKey}`, template, streamUrl
       });
+
+      // 5. INITIALIZE METADATA (with error handling and rollback)
+      try {
+        const npData = await Promise.race([
+          azura.getNowPlaying(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('AzuraCast API timeout')), 10000))
+        ]);
+        
+        const np = npData.find(d => d.station.id === stationIdInt);
+        let artUrl = null;
+        
+        if (np) {
+          const song = np.now_playing?.song || {};
+          artUrl = song.art || null;
+          info.currentSong = { artist: song.artist, title: song.title };
+          const nextSong = np.playing_next?.song;
+          
+          await streamer.writeMeta(info.dataDir, {
+            artist: song.artist || '', title: song.title || '',
+            next: nextSong ? `${nextSong.artist} - ${nextSong.title}` : ''
+          });
+        }
+
+        // 6. DOWNLOAD COVER
+        await streamer.downloadCover(artUrl, info.dataDir);
+        info.currentArtUrl = artUrl;
+
+        // 7. SPAWN FFMPEG (with failure rollback)
+        await streamer.spawnFfmpeg(info);
+
+      } catch (initErr) {
+        // Rollback: mark error and cleanup
+        info.status = 'error';
+        info.errorMessage = `Initialization failed: ${initErr.message}`;
+        streamer.emit('stream:updated', streamer.getSummary(info));
+        await streamer.deleteStreamDir(info.dataDir);
+        streamer.streams.delete(info.id);
+        
+        return res.status(500).json({ ok: false, error: 'Failed to initialize stream' });
+      }
+
+      res.json({ ok: true, data: streamer.getSummary(info) });
+      
+    } finally {
+      // Release lock
+      streamCreationLock.delete(lockKey);
     }
 
-    await streamer.downloadCover(artUrl, info.dataDir);
-    info.currentArtUrl = artUrl;
-    await streamer.spawnFfmpeg(info);
-
-    res.json({ ok: true, data: streamer.getSummary(info) });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    // Handle validation errors
+    if (err.validationErrors) {
+      const messages = err.validationErrors.map(e => e.message).join('; ');
+      return res.status(400).json({ ok: false, error: `Validation error: ${messages}` });
+    }
+    
+    // Sanitize error message
+    const sanitizedMsg = err.message.length > 200 ? err.message.substring(0, 200) : err.message;
+    res.status(500).json({ ok: false, error: 'Stream creation failed' });
+    console.error('[/api/streams/start] Error:', err);
   }
 });
 
@@ -191,7 +256,10 @@ app.get('/api/settings', async (req, res) => res.json({ ok: true, data: await db
 app.post('/api/settings', async (req, res) => {
   try {
     for (const [k, v] of Object.entries(req.body)) await db.updateSetting(k, v);
-    const settings = await db.getSettings();
+    
+    // Refresh cached settings
+    settings = await db.getSettings();
+    
     azura.updateConfig({ apiUrl: settings.AZURACAST_API_URL, apiKey: settings.AZURACAST_API_KEY });
     streamer.updateConfig({ 
       apiKey: settings.AZURACAST_API_KEY, 
@@ -199,13 +267,16 @@ app.post('/api/settings', async (req, res) => {
       H: parseInt(settings.VIDEO_HEIGHT) 
     });
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
+  } catch (err) { 
+    res.status(500).json({ ok: false, error: 'Settings update failed' });
+    console.error('[/api/settings POST] Error:', err);
+  }
 });
 
 // ── Initialization ────────────────────────────────────────────────────────────
 async function init() {
   await db.init();
-  const settings = await db.getSettings();
+  settings = await db.getSettings();  // Cache settings at startup
 
   azura = new AzuraClient({ apiUrl: settings.AZURACAST_API_URL, apiKey: settings.AZURACAST_API_KEY });
   streamer = new StreamManager({
@@ -213,6 +284,7 @@ async function init() {
     apiKey: settings.AZURACAST_API_KEY,
     W: parseInt(settings.VIDEO_WIDTH || '1280'),
     H: parseInt(settings.VIDEO_HEIGHT || '720'),
+    maxConcurrentStreams: parseInt(settings.MAX_CONCURRENT_STREAMS || '3'),
   });
 
   // Event bridges
@@ -228,5 +300,20 @@ async function init() {
 
   server.listen(CFG.PORT, () => console.log(`AzuraStreamer running on port ${CFG.PORT}`));
 }
+
+// ── Graceful Shutdown ─────────────────────────────────────────────────────────
+async function shutdown() {
+  console.log('Shutting down gracefully...');
+  
+  if (streamer) await streamer.shutdown();
+  io.removeAllListeners();
+  io.close();
+  server.close();
+  
+  process.exit(0);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 init().catch(console.error);
