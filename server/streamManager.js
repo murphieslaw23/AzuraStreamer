@@ -7,12 +7,14 @@ const path = require('path');
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const EventEmitter = require('events');
+const { validateDiskSpace } = require('./diskUtils');
 
 class StreamManager extends EventEmitter {
   constructor(config = {}) {
     super();
     this.streams = new Map();
     this.config = config; // Contains PORT, STREAMS_DIR, FONT, etc.
+    this.maxConcurrentStreams = config.maxConcurrentStreams || 3;
   }
 
   updateConfig(newConfig) {
@@ -25,9 +27,30 @@ class StreamManager extends EventEmitter {
       platform, streamKey, rtmpUrl, template, streamUrl 
     } = params;
 
+    // Check concurrent stream limit
+    const activeStreams = Array.from(this.streams.values()).filter(s => 
+      ['live', 'starting', 'reconnecting'].includes(s.status)
+    ).length;
+    
+    if (activeStreams >= this.maxConcurrentStreams) {
+      throw new Error(`Maximum concurrent streams (${this.maxConcurrentStreams}) reached`);
+    }
+
     const id = uuidv4();
     const dataDir = path.join(this.config.STREAMS_DIR, id);
-    await fsp.mkdir(dataDir, { recursive: true });
+    
+    // Validate disk space before creating directory
+    try {
+      validateDiskSpace(this.config.STREAMS_DIR);
+    } catch (err) {
+      throw new Error(`Disk space check failed: ${err.message}`);
+    }
+
+    try {
+      await fsp.mkdir(dataDir, { recursive: true });
+    } catch (err) {
+      throw new Error(`Failed to create stream directory: ${err.message}`);
+    }
 
     const info = {
       id, stationId, stationName, stationShortcode, listenUrl,
@@ -40,6 +63,7 @@ class StreamManager extends EventEmitter {
       listeners: 0,
       currentArtUrl: null,
       _restarting: false,
+      _ffmpegStartTimeout: null,
       stats: { fps: 0, bitrate: '0k', speed: '0x', time: '00:00:00' }
     };
 
@@ -65,7 +89,8 @@ class StreamManager extends EventEmitter {
   }
 
   getSummary(s) {
-    return {
+    // Create immutable snapshot of stream info for emission
+    return Object.freeze({
       id: s.id,
       stationId: s.stationId,
       stationName: s.stationName,
@@ -74,11 +99,11 @@ class StreamManager extends EventEmitter {
       startedAt: s.startedAt,
       status: s.status,
       errorMessage: s.errorMessage,
-      currentSong: s.currentSong,
+      currentSong: s.currentSong ? Object.freeze({ ...s.currentSong }) : null,
       listeners: s.listeners,
-      stats: s.stats,
+      stats: Object.freeze({ ...s.stats }),
       streamUrl: s.streamUrl,
-    };
+    });
   }
 
   getAllSummaries() {
@@ -86,6 +111,9 @@ class StreamManager extends EventEmitter {
   }
 
   async spawnFfmpeg(info) {
+    // Clear any previous timeout
+    if (info._ffmpegStartTimeout) clearTimeout(info._ffmpegStartTimeout);
+
     const args = this.buildArgs(info);
     const safeArgs = args.map(a => a.includes('rtmp://') ? 'rtmp://[REDACTED]' : a);
     
@@ -98,6 +126,16 @@ class StreamManager extends EventEmitter {
     info.process = proc;
     info.lastStartedAt = Date.now();
 
+    // Set 30-second timeout for ffmpeg to reach live status
+    info._ffmpegStartTimeout = setTimeout(() => {
+      if (info.status === 'starting') {
+        info.status = 'error';
+        info.errorMessage = 'ffmpeg startup timeout (30s)';
+        this.emit('stream:updated', this.getSummary(info));
+        if (proc) proc.kill('SIGTERM');
+      }
+    }, 30000);
+
     let stderrBuf = '';
     proc.stderr.on('data', (chunk) => {
       const s = chunk.toString();
@@ -108,6 +146,7 @@ class StreamManager extends EventEmitter {
       if ((info.status === 'starting' || info.status === 'reconnecting') && stderrBuf.includes('fps=')) {
         info.status = 'live';
         info.retryCount = 0;
+        if (info._ffmpegStartTimeout) clearTimeout(info._ffmpegStartTimeout);
         this.emit('stream:updated', this.getSummary(info));
       }
 
@@ -195,6 +234,9 @@ class StreamManager extends EventEmitter {
   }
 
   cleanupStream(info, delay = 5000) {
+    // Clear timeout if exists
+    if (info._ffmpegStartTimeout) clearTimeout(info._ffmpegStartTimeout);
+    
     setTimeout(() => {
       if (this.streams.has(info.id) && (info.status === 'stopped' || info.status === 'error')) {
         this.streams.delete(info.id);
@@ -202,6 +244,44 @@ class StreamManager extends EventEmitter {
         this.emit('stream:removed', { id: info.id });
       }
     }, delay);
+  }
+
+  async deleteStreamDir(dataDir) {
+    try {
+      await fsp.rm(dataDir, { recursive: true, force: true });
+    } catch (err) {
+      console.error('[StreamManager] Failed to cleanup directory:', err.message);
+    }
+  }
+
+  async shutdown() {
+    console.log('[StreamManager] Shutting down...');
+    
+    // Stop all active streams
+    for (const info of this.streams.values()) {
+      if (info.process) {
+        try {
+          info.process.kill('SIGTERM');
+        } catch (_) {}
+      }
+      if (info._ffmpegStartTimeout) {
+        clearTimeout(info._ffmpegStartTimeout);
+      }
+    }
+    
+    // Wait a bit for graceful shutdown
+    await new Promise(r => setTimeout(r, 2000));
+    
+    // Force kill any remaining processes
+    for (const info of this.streams.values()) {
+      if (info.process) {
+        try {
+          info.process.kill('SIGKILL');
+        } catch (_) {}
+      }
+    }
+    
+    this.removeAllListeners();
   }
 
   // ── Asset Management ───────────────────────────────────────────────────────
@@ -293,37 +373,46 @@ class StreamManager extends EventEmitter {
       const covSize = Math.floor(H * 0.25), marginX = Math.floor(W * 0.05), marginY = Math.floor(H * 0.08);
       const textX = marginX + covSize + 30, textY = H - marginY - covSize + 20;
       filterComplex = [
-        `[2:v]scale=${covSize}:${covSize}[cov]`,
-        `[1:v][cov]overlay=x=${marginX}:y=${H - marginY - covSize}:format=yuv420[v1]`,
+        `[1:v]format=yuv420p[bg]`,
+        `[2:v]format=yuv420p,scale=${covSize}:${covSize}[cov]`,
+        `[bg][cov]overlay=x=${marginX}:y=${H - marginY - covSize}:format=yuv420[v1]`,
         `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=32:fontcolor=white:x=${textX}:y=${textY},drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT}':fontsize=24:fontcolor=0xAAAAAA:x=${textX}:y=${textY+45}[vout]`,
-        `[vout]split[vstream][vprev]`, `[vprev]fps=1/10,scale=480:-1[vprevout]`
+        `[vout]split=2[vstream][vprev_in]`,
+        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
       ].join(';');
     } 
     else if (template === '2') {
       const covSize = Math.floor(H * 0.5), covX = (W - covSize) / 2, covY = (H - covSize) / 2 - 60;
       filterComplex = [
-        `[2:v]scale=${covSize}:${covSize}[cov]`,
-        `[1:v][cov]overlay=x=${covX}:y=${covY}:format=yuv420[v1]`,
+        `[1:v]format=yuv420p[bg]`,
+        `[2:v]format=yuv420p,scale=${covSize}:${covSize}[cov]`,
+        `[bg][cov]overlay=x=${covX}:y=${covY}:format=yuv420[v1]`,
         `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=${covY+covSize+40}[vout]`,
-        `[vout]split[vstream][vprev]`, `[vprev]fps=1/10,scale=480:-1[vprevout]`
+        `[vout]split=2[vstream][vprev_in]`,
+        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
       ].join(';');
     }
     else if (template === '4') {
       filterComplex = [
-        `[2:v]rotate=a=t*PI/2:c=none[spinning]`,
-        `[1:v][spinning]overlay=x=${COVER_X}:y=(H-360)/2:format=yuv420[v1]`,
+        `[1:v]format=yuv420p[bg]`,
+        `[2:v]format=yuv420p,rotate=a=t*PI/2:c=none[spinning]`,
+        `[bg][spinning]overlay=x=${COVER_X}:y=(H-360)/2:format=yuv420[v1]`,
         `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${COVER_X+420}:y=(H-360)/2+140[vout]`,
-        `[vout]split[vstream][vprev]`, `[vprev]fps=1/10,scale=480:-1[vprevout]`
+        `[vout]split=2[vstream][vprev_in]`,
+        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
       ].join(';');
     }
     else {
       const cY = (H - COVER_SIZE) / 2, TEXT_X = COVER_X + COVER_SIZE + 60;
       filterComplex = [
-        `[0:a]showwaves=s=${W}x100:mode=cline:colors=${waveColor}:scale=sqrt:rate=30,format=yuva420p[waves]`,
-        `[1:v][2:v]overlay=x=${COVER_X}:y=${cY}:format=yuv420[v1]`,
+        `[0:a]showwaves=s=${W}x100:mode=cline:colors=${waveColor}:scale=sqrt:rate=30,format=yuv420p[waves]`,
+        `[1:v]format=yuv420p[bg]`,
+        `[2:v]format=yuv420p[cov]`,
+        `[bg][cov]overlay=x=${COVER_X}:y=${cY}:format=yuv420[v1]`,
         `[v1][waves]overlay=x=0:y=H-100:format=yuv420[v2]`,
         `[v2]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT}':fontsize=20:fontcolor=0xAAAAAA:x=${TEXT_X}:y=${cY+100},drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${TEXT_X}:y=${cY+140}[vout]`,
-        `[vout]split[vstream][vprev]`, `[vprev]fps=1/10,scale=480:-1[vprevout]`
+        `[vout]split=2[vstream][vprev_in]`,
+        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
       ].join(';');
     }
 
@@ -331,7 +420,7 @@ class StreamManager extends EventEmitter {
       ...inputArgs, '-filter_complex', filterComplex, '-map', '[vstream]', '-map', '0:a',
       '-c:v', 'libx264', '-preset', 'superfast', '-tune', 'stillimage', '-b:v', '3000k', '-maxrate', '3500k', '-bufsize', '12000k',
       '-pix_fmt', 'yuv420p', '-g', '60', '-keyint_min', '60', '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
-      '-f', 'flv', rtmpUrl, '-map', '[vprevout]', '-f', 'image2', '-update', '1', path.join(dataDir, 'preview.jpg')
+      '-f', 'flv', rtmpUrl, '-map', '[vprevout]', '-c:v', 'mjpeg', '-q:v', '5', '-pix_fmt', 'yuvj420p', '-f', 'image2', '-update', '1', path.join(dataDir, 'preview.jpg')
     ];
   }
 }

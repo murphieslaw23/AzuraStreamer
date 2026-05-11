@@ -65,6 +65,7 @@ class Database {
       'POLL_MS'             : '15000',
       'VIDEO_WIDTH'         : '1280',
       'VIDEO_HEIGHT'        : '720',
+      'MAX_CONCURRENT_STREAMS': '3',
       'DEFAULT_STREAM_TITLE'  : 'AzuraStreamer Live',
       'DEFAULT_STREAM_DESC'   : 'Live stream from AzuraCast via AzuraStreamer',
       'DEFAULT_STREAM_VISIBILITY': 'public',

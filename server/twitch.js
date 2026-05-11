@@ -47,13 +47,43 @@ async function getStreamKey(accessToken) {
   const settings = await db.getSettings();
   const clientId = settings.TWITCH_CLIENT_ID;
 
+  if (!accessToken) {
+    // Try to refresh token if we don't have access token
+    if (!settings.TWITCH_REFRESH_TOKEN) {
+      throw new Error('Twitch not connected. Please connect via OAuth first.');
+    }
+    
+    try {
+      const resp = await axios.post(TWITCH_TOKEN_URL, querystring.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: settings.TWITCH_REFRESH_TOKEN,
+        client_id: settings.TWITCH_CLIENT_ID,
+        client_secret: settings.TWITCH_CLIENT_SECRET
+      }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 5000 });
+
+      accessToken = resp.data.access_token;
+      
+      // Update refresh token if provided
+      if (resp.data.refresh_token) {
+        await db.updateSetting('TWITCH_REFRESH_TOKEN', resp.data.refresh_token);
+      }
+    } catch (err) {
+      throw new Error(`Twitch token refresh failed: ${err.message}`);
+    }
+  }
+
   // 1. Get User ID
   const userRes = await axios.get(`${TWITCH_API_BASE}/users`, {
     headers: {
       'Client-ID': clientId,
       'Authorization': `Bearer ${accessToken}`
-    }
+    },
+    timeout: 5000
   });
+
+  if (!userRes.data.data || userRes.data.data.length === 0) {
+    throw new Error('Could not fetch Twitch user info');
+  }
 
   const userId = userRes.data.data[0].id;
   const username = userRes.data.data[0].login;
@@ -63,8 +93,13 @@ async function getStreamKey(accessToken) {
     headers: {
       'Client-ID': clientId,
       'Authorization': `Bearer ${accessToken}`
-    }
+    },
+    timeout: 5000
   });
+
+  if (!keyRes.data.data || keyRes.data.data.length === 0) {
+    throw new Error('Could not fetch Twitch stream key');
+  }
 
   return { streamKey: keyRes.data.data[0].stream_key, username };
 }
