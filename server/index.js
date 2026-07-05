@@ -49,14 +49,38 @@ io.engine.use(sessionMiddleware);
 // auth.requireAuth used later in middleware
 
 // Public Assets
-app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
-app.get('/setup.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'setup.html')));
-app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
-app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
+app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'login.html')));
+app.get('/setup.html', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'setup.html')));
+app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'privacy.html')));
+app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'terms.html')));
 
 // No authorization: serve static files and APIs without auth checks
 
-app.use(express.static(path.join(__dirname, 'public')));
+  app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Serve index at root
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+
+// ── Mock endpoints (for local testing without AzuraCast) ───────────────────
+app.get('/mock/azura/stations', (req, res) => {
+  return res.json([
+    { id: 1, name: 'Test Station', mounts: [{ name: 'Default', url: 'http://example.local/stream' }] }
+  ]);
+});
+
+app.get('/mock/azura/nowplaying', (req, res) => {
+  return res.json([
+    {
+      station: { id: 1, name: 'Test Station' },
+      listeners: { total: 3 },
+      is_online: true,
+      live: { is_live: false },
+      now_playing: { song: { artist: 'Demo Artist', title: 'Demo Title', album: '', genre: '', art: '' }, elapsed: 12, duration: 180 },
+      playing_next: { song: { artist: 'Next Artist', title: 'Next Title' } },
+      song_history: []
+    }
+  ]);
+});
 
 // ── Socket.io Logic ──────────────────────────────────────────────────────────
 io.use((socket, next) => next());

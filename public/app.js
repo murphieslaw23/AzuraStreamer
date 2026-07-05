@@ -89,21 +89,19 @@ function updateDashboard() {
   const stream = streams.find(s => s.stationId === station.id && s.status !== 'stopped');
   const song = np?.nowPlaying || {};
 
-  // Station Info
-  $('#station-name-display').textContent = station.name;
-  $('#station-online-badge').hidden = !np?.isOnline;
-  $('#station-live-badge').hidden = !np?.isLive;
-  $('#listener-num-display').textContent = np?.listeners ?? 0;
-  $('#sel-station').value = station.id;
+  // Station Info (guard elements)
+  const stationNameEl = $('#station-name-display'); if (stationNameEl) stationNameEl.textContent = station.name;
+  const onlineBadge = $('#station-online-badge'); if (onlineBadge) onlineBadge.hidden = !np?.isOnline;
+  const liveBadge = $('#station-live-badge'); if (liveBadge) liveBadge.hidden = !np?.isLive;
+  const listenerEl = $('#listener-num-display'); if (listenerEl) listenerEl.textContent = np?.listeners ?? 0;
+  const selStation = $('#sel-station'); if (selStation) selStation.value = station.id;
 
   // Media
-  const artImg = $('#art-img-display');
-  if (song.art && artImg.src !== song.art) artImg.src = song.art;
-  $('#np-title-display').textContent = song.title || '—';
-  $('#np-artist-display').textContent = song.artist || '—';
-  
-  if (song.duration > 0) $('#np-fill-display').style.width = `${Math.min(100, (song.elapsed / song.duration) * 100)}%`;
-  $('#np-time-display').textContent = song.duration ? `${fmtTime(song.elapsed)} / ${fmtTime(song.duration)}` : '';
+  const artImg = $('#art-img-display'); if (artImg && song.art && artImg.src !== song.art) artImg.src = song.art;
+  const npTitle = $('#np-title-display'); if (npTitle) npTitle.textContent = song.title || '—';
+  const npArtist = $('#np-artist-display'); if (npArtist) npArtist.textContent = song.artist || '—';
+  const npFill = $('#np-fill-display'); if (npFill && song.duration > 0) npFill.style.width = `${Math.min(100, (song.elapsed / song.duration) * 100)}%`;
+  const npTime = $('#np-time-display'); if (npTime) npTime.textContent = song.duration ? `${fmtTime(song.elapsed)} / ${fmtTime(song.duration)}` : '';
 
   // Stream UI
   const banner = $('#stream-status-banner');
@@ -113,39 +111,29 @@ function updateDashboard() {
   const btnStop = $('#btn-stop');
 
   if (stream) {
-    banner.hidden = false;
-    banner.textContent = stream.status.toUpperCase() + (stream.errorMessage && stream.status !== 'live' ? `: ${stream.errorMessage}` : '');
-    banner.className = `stream-status-label status--${stream.status}`;
-    
-    stats.hidden = false;
-    preview.hidden = false;
-    btnStart.hidden = true;
-    btnStop.hidden = false;
+    if (banner) { banner.hidden = false; banner.textContent = stream.status.toUpperCase() + (stream.errorMessage && stream.status !== 'live' ? `: ${stream.errorMessage}` : ''); banner.className = `stream-status-label status--${stream.status}`; }
+    if (stats) stats.hidden = false;
+    if (preview) preview.hidden = false;
+    if (btnStart) btnStart.hidden = true;
+    if (btnStop) btnStop.hidden = false;
 
-    $('#stat-bitrate').textContent = stream.stats?.bitrate || '0k';
-    $('#stat-fps').textContent = stream.stats?.fps || '0';
-    $('#stat-speed').textContent = stream.stats?.speed || '0x';
+    const sb = $('#stat-bitrate'); if (sb) sb.textContent = stream.stats?.bitrate || '0k';
+    const sf = $('#stat-fps'); if (sf) sf.textContent = stream.stats?.fps || '0';
+    const ss = $('#stat-speed'); if (ss) ss.textContent = stream.stats?.speed || '0x';
 
     const uptimeEl = $('#stat-uptime');
-    clearInterval(uptimeTimers[station.id]);
-    uptimeTimers[station.id] = setInterval(() => uptimeEl.textContent = fmtUptime(stream.startedAt), 1000);
-    uptimeEl.textContent = fmtUptime(stream.startedAt);
+    try { clearInterval(uptimeTimers[station.id]); } catch (e) {}
+    if (uptimeEl) { uptimeTimers[station.id] = setInterval(() => { uptimeEl.textContent = fmtUptime(stream.startedAt); }, 1000); uptimeEl.textContent = fmtUptime(stream.startedAt); }
 
-    if (stream.status === 'live') {
-      $('#preview-img-display').src = `/api/streams/${stream.id}/preview?t=${Date.now()}`;
-      if (stream.streamUrl) { $('#link-stream').href = stream.streamUrl; $('#link-stream').hidden = false; }
-    } else {
-      $('#link-stream').hidden = true;
-    }
-    btnStop.onclick = () => stopStream(stream.id);
+    const previewImg = $('#preview-img-display'); if (previewImg && stream.status === 'live') previewImg.src = `/api/streams/${stream.id}/preview?t=${Date.now()}`;
+    const linkStream = $('#link-stream'); if (linkStream) { if (stream.streamUrl && stream.status === 'live') { linkStream.href = stream.streamUrl; linkStream.hidden = false; } else linkStream.hidden = true; }
+
+    if (btnStop) btnStop.onclick = () => stopStream(stream.id);
   } else {
     [banner, stats, preview, $('#link-stream')].forEach(el => el && (el.hidden = true));
-    btnStart.hidden = false;
-    btnStop.hidden = true;
-    if (uptimeTimers[station.id]) {
-      clearInterval(uptimeTimers[station.id]);
-      delete uptimeTimers[station.id];
-    }
+    if (btnStart) btnStart.hidden = false;
+    if (btnStop) btnStop.hidden = true;
+    if (uptimeTimers[station.id]) { clearInterval(uptimeTimers[station.id]); delete uptimeTimers[station.id]; }
   }
 }
 
@@ -207,7 +195,7 @@ $('#stream-form').addEventListener('submit', async (e) => {
   const station = Store.state.stations.find(s => s.id === stationId);
   if (!station) return toast('Station not found', 'error');
 
-  const mount = station.mounts?.find(m => !m.name.toLowerCase().includes('mobile')) || station.mounts?.[0];
+  const mount = station.mounts ? (station.mounts.find(m => !(String(m.name || '').toLowerCase().includes('mobile'))) || station.mounts[0]) : null;
   if (!mount) return toast('No mount found', 'error');
 
   try {
@@ -324,4 +312,4 @@ function addLogLine(entry) {
   window.addEventListener('beforeunload', clearAllTimers);
 })();
 
-$('#chk-manual-key').onchange = (e) => $('#manual-key-wrap').style.display = e.target.checked ? 'block' : 'none';
+const chkManual = $('#chk-manual-key'); if (chkManual) chkManual.onchange = (e) => { const wrap = $('#manual-key-wrap'); if (wrap) wrap.style.display = e.target.checked ? 'block' : 'none'; };

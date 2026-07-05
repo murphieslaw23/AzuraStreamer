@@ -393,11 +393,12 @@ class StreamManager extends EventEmitter {
       ].join(';');
     }
     else if (template === '4') {
+      const covY = Math.floor((H - COVER_SIZE) / 2);
       filterComplex = [
         `[1:v]format=yuv420p[bg]`,
         `[2:v]format=yuv420p,rotate=a=t*PI/2:c=none[spinning]`,
-        `[bg][spinning]overlay=x=${COVER_X}:y=(H-360)/2:format=yuv420[v1]`,
-        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${COVER_X+420}:y=(H-360)/2+140[vout]`,
+        `[bg][spinning]overlay=x=${COVER_X}:y=${covY}:format=yuv420[v1]`,
+        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${COVER_X+420}:y=${covY + 140}[vout]`,
         `[vout]split=2[vstream][vprev_in]`,
         `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
       ].join(';');
@@ -409,7 +410,7 @@ class StreamManager extends EventEmitter {
         `[1:v]format=yuv420p[bg]`,
         `[2:v]format=yuv420p[cov]`,
         `[bg][cov]overlay=x=${COVER_X}:y=${cY}:format=yuv420[v1]`,
-        `[v1][waves]overlay=x=0:y=H-100:format=yuv420[v2]`,
+        `[v1][waves]overlay=x=0:y=${H - 100}:format=yuv420[v2]`,
         `[v2]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT}':fontsize=20:fontcolor=0xAAAAAA:x=${TEXT_X}:y=${cY+100},drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${TEXT_X}:y=${cY+140}[vout]`,
         `[vout]split=2[vstream][vprev_in]`,
         `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
