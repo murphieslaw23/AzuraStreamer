@@ -376,6 +376,22 @@ button, input, select { font-family: inherit; color: inherit; }
 .btn--yt { background: #ff0000; color: #fff; }
 .btn--tw { background: #9146ff; color: #fff; }
 
+/* Loading state for buttons */
+.btn--loading { position: relative; pointer-events: none; opacity: 0.9; }
+.btn--loading::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── Form Elements ─────────────────────────────────────────────────────────── */
 
 .form-group { margin-bottom: 20px; }
@@ -545,6 +561,19 @@ button, input, select { font-family: inherit; color: inherit; }
   position: relative;
   overflow: hidden;
 }
+
+.toast .toast-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px;
+}
+.toast .toast-close:hover { color: #fff; }
 
 .toast--success { border-left: 4px solid var(--success); }
 .toast--error { border-left: 4px solid var(--danger); }

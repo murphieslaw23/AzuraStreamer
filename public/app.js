@@ -66,16 +66,23 @@ function toast(msg, type = 'info') {
 
   const el = document.createElement('div');
   el.className = `toast toast--${type}`;
+  el.setAttribute('role', 'status');
+  el.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
   el.innerHTML = `
     <div class="toast-icon" style="color: var(--${type})">${icons[type]}</div>
     <div class="toast-content">
       <div class="toast-title">${titles[type]}</div>
       <div class="toast-message">${msg}</div>
     </div>
+    <button class="toast-close" aria-label="Close notification">✕</button>
   `;
   
-  $('#toasts')?.prepend(el);
-  setTimeout(() => { el.classList.add('removing'); setTimeout(() => el.remove(), 300); }, 5000);
+  const toasts = $('#toasts'); if (toasts) toasts.prepend(el);
+  const closeBtn = el.querySelector('.toast-close');
+  if (closeBtn) closeBtn.onclick = () => { el.classList.add('removing'); setTimeout(() => el.remove(), 300); };
+  const autoClose = setTimeout(() => { el.classList.add('removing'); setTimeout(() => el.remove(), 300); }, 5000);
+  el.addEventListener('mouseenter', () => clearTimeout(autoClose));
+  el.addEventListener('mouseleave', () => setTimeout(() => { if (document.body.contains(el)) { el.classList.add('removing'); setTimeout(() => el.remove(), 300); } }, 3000));
 }
 
 /* ── UI Components ────────────────────────────────────────────────────────── */
@@ -198,7 +205,9 @@ $('#stream-form').addEventListener('submit', async (e) => {
   const mount = station.mounts ? (station.mounts.find(m => !(String(m.name || '').toLowerCase().includes('mobile'))) || station.mounts[0]) : null;
   if (!mount) return toast('No mount found', 'error');
 
+  const btnStart = $('#btn-start');
   try {
+    if (btnStart) { btnStart.disabled = true; btnStart.classList.add('btn--loading'); }
     const res = await apiFetch('/api/streams/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -213,8 +222,9 @@ $('#stream-form').addEventListener('submit', async (e) => {
       })
     }).then(r => r.json());
     if (res.ok) toast('Stream process started!', 'success');
-    else throw new Error(res.error);
+    else throw new Error(res.error || 'Stream start failed');
   } catch (err) { toast(err.message, 'error'); }
+  finally { if (btnStart) { btnStart.disabled = false; btnStart.classList.remove('btn--loading'); } }
 });
 
 // Logout disabled (no auth) — refresh state instead
@@ -228,10 +238,27 @@ $('#btn-settings').onclick = () => {
   $$('.display-redirect-uri').forEach(el => el.textContent = `${window.location.protocol}//${host}/api/${el.dataset.platform}/callback`);
   const form = $('#settings-form');
   for (const [k, v] of Object.entries(Store.state.settings)) if (form?.elements[k]) form.elements[k].value = v;
-  $('#settings-modal').classList.add('active');
+  const modal = $('#settings-modal');
+  if (modal) {
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.classList.add('active');
+    // focus first input
+    setTimeout(() => {
+      const first = modal.querySelector('input, select, textarea, button');
+      if (first) first.focus();
+    }, 50);
+  }
 };
 
 $$('.btn-close-modal').forEach(btn => btn.onclick = () => $('#settings-modal').classList.remove('active'));
+
+// Close modal on Escape
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const modal = $('#settings-modal'); if (modal && modal.classList.contains('active')) modal.classList.remove('active');
+  }
+});
 
 $('#settings-form').onsubmit = async (e) => {
   e.preventDefault();
