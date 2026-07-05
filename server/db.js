@@ -50,6 +50,21 @@ class Database {
       )
     `);
 
+    await this.run(`
+      CREATE TABLE IF NOT EXISTS stream_state (
+        id TEXT PRIMARY KEY,
+        stationId INTEGER,
+        stationName TEXT,
+        platform TEXT,
+        status TEXT,
+        startedAt TEXT,
+        dataDir TEXT,
+        streamUrl TEXT,
+        payload TEXT,
+        updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     const defaults = {
       'AZURACAST_API_URL'   : process.env.AZURACAST_API_URL || '',
       'AZURACAST_API_KEY'   : process.env.AZURACAST_API_KEY || '',
@@ -84,6 +99,58 @@ class Database {
 
   async updateSetting(key, value) {
     await this.run(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, [key, String(value)]);
+  }
+
+  async saveStreamState(stream) {
+    const payload = JSON.stringify({
+      stationId: stream.stationId,
+      stationName: stream.stationName,
+      stationShortcode: stream.stationShortcode,
+      listenUrl: stream.listenUrl,
+      platform: stream.platform,
+      streamKey: stream.streamKey,
+      rtmpUrl: stream.rtmpUrl,
+      dataDir: stream.dataDir,
+      template: stream.template,
+      streamUrl: stream.streamUrl,
+      status: stream.status,
+      startedAt: stream.startedAt,
+      errorMessage: stream.errorMessage,
+      currentSong: stream.currentSong,
+      listeners: stream.listeners,
+      currentArtUrl: stream.currentArtUrl,
+      stats: stream.stats,
+      retryCount: stream.retryCount,
+      lastStartedAt: stream.lastStartedAt,
+    });
+
+    await this.run(`
+      INSERT INTO stream_state (id, stationId, stationName, platform, status, startedAt, dataDir, streamUrl, payload, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET
+        stationId=excluded.stationId,
+        stationName=excluded.stationName,
+        platform=excluded.platform,
+        status=excluded.status,
+        startedAt=excluded.startedAt,
+        dataDir=excluded.dataDir,
+        streamUrl=excluded.streamUrl,
+        payload=excluded.payload,
+        updatedAt=CURRENT_TIMESTAMP
+    `, [stream.id, stream.stationId ?? null, stream.stationName ?? null, stream.platform ?? null, stream.status ?? null, stream.startedAt ?? null, stream.dataDir ?? null, stream.streamUrl ?? null, payload]);
+  }
+
+  async getPersistedStreams() {
+    const rows = await this.all(`SELECT * FROM stream_state ORDER BY updatedAt DESC`);
+    return rows.map(row => ({ ...row, payload: JSON.parse(row.payload || '{}') }));
+  }
+
+  async deletePersistedStream(id) {
+    await this.run(`DELETE FROM stream_state WHERE id = ?`, [id]);
+  }
+
+  async clearPersistedStreams() {
+    await this.run(`DELETE FROM stream_state`);
   }
 }
 

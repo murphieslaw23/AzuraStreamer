@@ -318,6 +318,8 @@ async function init() {
   streamer.on('log:system', (l) => sysLog(l));
   streamer.on('log:stream', (l) => streamLog(l));
 
+  await streamer.restorePersistedStreams();
+
   // Polling
   setInterval(poll, parseInt(settings.POLL_MS || '15000'));
   poll();

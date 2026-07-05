@@ -8,6 +8,7 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const EventEmitter = require('events');
 const { validateDiskSpace } = require('./diskUtils');
+const db = require('./db');
 
 class StreamManager extends EventEmitter {
   constructor(config = {}) {
@@ -19,6 +20,60 @@ class StreamManager extends EventEmitter {
 
   updateConfig(newConfig) {
     this.config = { ...this.config, ...newConfig };
+  }
+
+  async persistStreamState(info) {
+    if (!info || !info.id) return;
+    try {
+      await db.saveStreamState(info);
+    } catch (err) {
+      console.error('[StreamManager] Failed to persist stream state:', err.message);
+    }
+  }
+
+  async removePersistedStream(info) {
+    if (!info || !info.id) return;
+    try {
+      await db.deletePersistedStream(info.id);
+    } catch (err) {
+      console.error('[StreamManager] Failed to remove persisted stream state:', err.message);
+    }
+  }
+
+  async restorePersistedStreams() {
+    const rows = await db.getPersistedStreams();
+    for (const row of rows) {
+      const info = {
+        ...row.payload,
+        id: row.id,
+        stationId: row.stationId ?? row.payload.stationId,
+        stationName: row.stationName ?? row.payload.stationName,
+        platform: row.platform ?? row.payload.platform,
+        startedAt: row.startedAt ?? row.payload.startedAt,
+        dataDir: row.dataDir ?? row.payload.dataDir,
+        streamUrl: row.streamUrl ?? row.payload.streamUrl,
+        process: null,
+        _restarting: false,
+        _ffmpegStartTimeout: null,
+        stats: row.payload.stats || { fps: 0, bitrate: '0k', speed: '0x', time: '00:00:00' },
+        currentSong: row.payload.currentSong || null,
+        listeners: row.payload.listeners || 0,
+        currentArtUrl: row.payload.currentArtUrl || null,
+        errorMessage: row.payload.errorMessage || null,
+        retryCount: row.payload.retryCount || 0,
+      };
+
+      if (!info.dataDir) continue;
+
+      this.streams.set(info.id, info);
+      this.emit('stream:added', this.getSummary(info));
+
+      if (['live', 'starting', 'reconnecting'].includes(info.status)) {
+        await this.spawnFfmpeg(info);
+      }
+    }
+
+    return rows;
   }
 
   async startStream(params) {
@@ -68,12 +123,13 @@ class StreamManager extends EventEmitter {
     };
 
     this.streams.set(id, info);
+    await this.persistStreamState(info);
     this.emit('stream:added', this.getSummary(info));
 
     return info;
   }
 
-  stopStream(id) {
+  async stopStream(id) {
     const s = this.streams.get(id);
     if (!s) return false;
     
@@ -83,6 +139,7 @@ class StreamManager extends EventEmitter {
       setTimeout(() => { if (s.process) try { s.process.kill('SIGKILL'); } catch(_) {} }, 3000);
     }
     
+    await this.persistStreamState(s);
     this.emit('stream:updated', this.getSummary(s));
     this.cleanupStream(s, 5000);
     return true;
@@ -131,6 +188,7 @@ class StreamManager extends EventEmitter {
       if (info.status === 'starting') {
         info.status = 'error';
         info.errorMessage = 'ffmpeg startup timeout (30s)';
+        this.persistStreamState(info).catch(() => {});
         this.emit('stream:updated', this.getSummary(info));
         if (proc) proc.kill('SIGTERM');
       }
@@ -147,6 +205,7 @@ class StreamManager extends EventEmitter {
         info.status = 'live';
         info.retryCount = 0;
         if (info._ffmpegStartTimeout) clearTimeout(info._ffmpegStartTimeout);
+        this.persistStreamState(info).catch(() => {});
         this.emit('stream:updated', this.getSummary(info));
       }
 
@@ -162,6 +221,7 @@ class StreamManager extends EventEmitter {
         const now = Date.now();
         if (!info._lastStatBroadcast || now - info._lastStatBroadcast > 3000) {
           info._lastStatBroadcast = now;
+          this.persistStreamState(info).catch(() => {});
           this.emit('stream:updated', this.getSummary(info));
         }
       }
@@ -198,6 +258,7 @@ class StreamManager extends EventEmitter {
         const delay = Math.min(1000 * Math.pow(2, info.retryCount - 1), 30000);
         info.status = 'reconnecting';
         info.errorMessage = `Connection lost. Retrying... (${info.retryCount}/${maxRetries})`;
+        this.persistStreamState(info).catch(() => {});
         this.emit('stream:updated', this.getSummary(info));
 
         setTimeout(() => {
@@ -206,6 +267,7 @@ class StreamManager extends EventEmitter {
       } else {
         info.status = 'error';
         info.errorMessage = `Max retries reached. ${stderrBuf.slice(-200)}`;
+        this.persistStreamState(info).catch(() => {});
         this.emit('stream:updated', this.getSummary(info));
         this.cleanupStream(info, 60000);
       }
@@ -214,6 +276,7 @@ class StreamManager extends EventEmitter {
     proc.on('error', (err) => {
       info.status = 'error';
       info.errorMessage = err.message;
+      this.persistStreamState(info).catch(() => {});
       this.emit('stream:updated', this.getSummary(info));
     });
   }
@@ -222,6 +285,7 @@ class StreamManager extends EventEmitter {
     if (!info.process) return;
     info._restarting = true;
     info.status = 'starting';
+    await this.persistStreamState(info);
     this.emit('stream:updated', this.getSummary(info));
 
     try { info.process.kill('SIGTERM'); } catch (_) {}
@@ -240,6 +304,7 @@ class StreamManager extends EventEmitter {
     setTimeout(() => {
       if (this.streams.has(info.id) && (info.status === 'stopped' || info.status === 'error')) {
         this.streams.delete(info.id);
+        this.removePersistedStream(info).catch(() => {});
         fsp.rm(info.dataDir, { recursive: true, force: true }).catch(() => {});
         this.emit('stream:removed', { id: info.id });
       }
