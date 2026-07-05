@@ -29,6 +29,11 @@ const Store = {
 
 const uptimeTimers = {};
 
+function clearAllTimers() {
+  Object.values(uptimeTimers).forEach(timerId => clearInterval(timerId));
+  for (const key in uptimeTimers) delete uptimeTimers[key];
+}
+
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
@@ -134,10 +139,13 @@ function updateDashboard() {
     }
     btnStop.onclick = () => stopStream(stream.id);
   } else {
-    [banner, stats, preview, $('#link-stream')].forEach(el => el.hidden = true);
+    [banner, stats, preview, $('#link-stream')].forEach(el => el && (el.hidden = true));
     btnStart.hidden = false;
     btnStop.hidden = true;
-    clearInterval(uptimeTimers[station.id]);
+    if (uptimeTimers[station.id]) {
+      clearInterval(uptimeTimers[station.id]);
+      delete uptimeTimers[station.id];
+    }
   }
 }
 
@@ -192,9 +200,12 @@ async function stopStream(id) {
 
 $('#stream-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const stationId = parseInt($('#sel-station').value);
+  const stationIdValue = $('#sel-station')?.value;
+  if (!stationIdValue) return toast('No station selected', 'error');
+  const stationId = parseInt(stationIdValue, 10);
+  if (isNaN(stationId)) return toast('Invalid station ID', 'error');
   const station = Store.state.stations.find(s => s.id === stationId);
-  if (!station) return;
+  if (!station) return toast('Station not found', 'error');
 
   const mount = station.mounts?.find(m => !m.name.toLowerCase().includes('mobile')) || station.mounts?.[0];
   if (!mount) return toast('No mount found', 'error');
@@ -206,11 +217,11 @@ $('#stream-form').addEventListener('submit', async (e) => {
       body: JSON.stringify({
         stationId, stationName: station.name, listenUrl: mount.url,
         platform: $('input[name="platform"]:checked')?.value,
-        title: $('#inp-stream-title').value.trim(),
-        description: $('#inp-stream-desc').value.trim(),
-        privacyStatus: $('#sel-visibility').value,
-        template: $('#sel-template').value,
-        manualStreamKey: $('#chk-manual-key').checked ? $('#inp-manual-key').value.trim() : null
+        title: $('#inp-stream-title').value?.trim() || '',
+        description: $('#inp-stream-desc').value?.trim() || '',
+        privacyStatus: $('#sel-visibility').value || 'public',
+        template: parseInt($('#sel-template').value, 10) || 3,
+        manualStreamKey: $('#chk-manual-key').checked ? $('#inp-manual-key').value?.trim() : null
       })
     }).then(r => r.json());
     if (res.ok) toast('Stream process started!', 'success');
@@ -228,11 +239,11 @@ $('#btn-settings').onclick = () => {
   const host = window.location.host;
   $$('.display-redirect-uri').forEach(el => el.textContent = `${window.location.protocol}//${host}/api/${el.dataset.platform}/callback`);
   const form = $('#settings-form');
-  for (const [k, v] of Object.entries(Store.state.settings)) if (form.elements[k]) form.elements[k].value = v;
+  for (const [k, v] of Object.entries(Store.state.settings)) if (form?.elements[k]) form.elements[k].value = v;
   $('#settings-modal').classList.add('active');
 };
 
-$('.btn-close-modal').onclick = () => $('#settings-modal').classList.remove('active');
+$$('.btn-close-modal').forEach(btn => btn.onclick = () => $('#settings-modal').classList.remove('active'));
 
 $('#settings-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -252,8 +263,16 @@ $('#settings-form').onsubmit = async (e) => {
 
 function initSocket() {
   const socket = io();
-  socket.on('connect', () => { Store.update({ connected: true }); $('#connection-badge').className = 'badge badge--connected'; $('.badge-text', $('#connection-badge')).textContent = 'Connected'; });
-  socket.on('disconnect', () => { Store.update({ connected: false }); $('#connection-badge').className = 'badge badge--error'; $('.badge-text', $('#connection-badge')).textContent = 'Disconnected'; });
+  socket.on('connect', () => { 
+    Store.update({ connected: true }); 
+    $('#connection-badge').className = 'badge badge--connected'; 
+    $('#connection-badge .badge-text').textContent = 'Connected'; 
+  });
+  socket.on('disconnect', () => { 
+    Store.update({ connected: false }); 
+    $('#connection-badge').className = 'badge badge--error'; 
+    $('#connection-badge .badge-text').textContent = 'Disconnected'; 
+  });
 
   socket.on('stream:new', (data) => { Store.update({ streams: [...Store.state.streams, data] }); });
   socket.on('stream:update', (data) => {
@@ -300,6 +319,9 @@ function addLogLine(entry) {
       updateDashboard();
     }
   }, 1000);
+  
+  // Cleanup timers on page unload
+  window.addEventListener('beforeunload', clearAllTimers);
 })();
 
 $('#chk-manual-key').onchange = (e) => $('#manual-key-wrap').style.display = e.target.checked ? 'block' : 'none';

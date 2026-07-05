@@ -49,8 +49,11 @@ function validateStreamStart(params) {
   }
 
   // template validation
-  if (params.template && !VALID_TEMPLATES.includes(params.template)) {
-    errors.push(new ValidationError('template', `must be one of: ${VALID_TEMPLATES.join(', ')}`));
+  if (params.template) {
+    const templateStr = String(params.template);
+    if (!VALID_TEMPLATES.includes(templateStr)) {
+      errors.push(new ValidationError('template', `must be one of: ${VALID_TEMPLATES.join(', ')}`));
+    }
   }
 
   // title validation for auto-stream
