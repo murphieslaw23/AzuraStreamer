@@ -3,13 +3,18 @@ FROM node:20-slim
 LABEL maintainer="AzuraStreamer"
 LABEL description="AzuraCast → YouTube/Twitch Live Stream Controller"
 
-# Install ffmpeg + fonts
+# Install ffmpeg + fonts + chromium deps for puppeteer
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   fonts-dejavu-core \
   fonts-liberation \
   ca-certificates \
+  chromium \
   && rm -rf /var/lib/apt/lists/*
+
+# Skip puppeteer Chromium download, use system chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
