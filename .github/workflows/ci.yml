@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # There is no lockfile, so `npm ci` is not available. Committing
+      # server/package-lock.json would make these builds reproducible.
+      - name: Install server dependencies
+        working-directory: server
+        env:
+          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+        run: npm install --no-audit --no-fund
+      - name: Syntax check
+        run: |
+          set -euo pipefail
+          for file in server/*.js public/app.js tools/*.js; do
+            node --check "$file"
+          done
+      - name: Unit tests
+        run: node --test tests/db-persistence.test.js
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: azurastreamer:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Boot the container and probe it
+        # Exercises the real image: the process must come up and answer on the
+        # API surface the healthcheck and the frontend both depend on.
+        run: |
+          set -euo pipefail
+          docker run -d --name azurastreamer-ci -p 3000:3000 \
+            -e NODE_ENV=production -e SESSION_SECRET=ci-only-not-a-real-secret \
+            azurastreamer:ci
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+              echo "container answered after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container did not answer in time" >&2
+          docker logs azurastreamer-ci >&2
+          exit 1
+      - name: Container logs
+        if: always()
+        run: docker logs azurastreamer-ci 2>&1 | tail -50 || true

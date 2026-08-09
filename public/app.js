@@ -277,7 +277,11 @@ $('#settings-form').onsubmit = async (e) => {
 /* ── Socket.io ───────────────────────────────────────────────────────────── */
 
 function initSocket() {
-  const socket = io();
+  // WebSocket upgrades cannot traverse a static-host proxy rewrite, so when the
+  // UI is deployed apart from the backend the socket dials the backend origin
+  // directly and has to be told to send the session cookie with it.
+  const apiOrigin = (window.AZURA_CONFIG && window.AZURA_CONFIG.apiOrigin) || '';
+  const socket = apiOrigin ? io(apiOrigin, { withCredentials: true }) : io();
   socket.on('connect', () => { 
     Store.update({ connected: true }); 
     $('#connection-badge').className = 'badge badge--connected'; 

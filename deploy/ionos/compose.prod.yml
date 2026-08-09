@@ -1,0 +1,49 @@
+# Production composition for the IONOS VPS.
+#
+# Copied to ${IONOS_APP_DIR} by the deploy workflow. Unlike the repository's
+# docker-compose.yml this runs a published GHCR image instead of building on the
+# server, and reads secrets from the sibling `.env` that the operator maintains.
+#
+# The container binds to loopback; the host TLS reverse proxy terminates HTTPS on
+# the public API hostname and must forward WebSocket upgrade headers so Socket.io
+# can connect from the Vercel-hosted UI.
+services:
+  azurastreamer:
+    image: ${AZURA_IMAGE:?Set AZURA_IMAGE to the fully qualified GHCR reference}
+    container_name: azurastreamer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${AZURA_BIND_PORT:-3000}:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: "production"
+      # Required in production; the process refuses to start without it.
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      # Comma-separated origins of the Vercel-hosted UI. Setting this switches the
+      # session cookie to SameSite=None; Secure and enables Socket.io CORS for
+      # exactly these origins. Leave empty for an all-in-one deployment.
+      PUBLIC_APP_ORIGINS: ${PUBLIC_APP_ORIGINS:-}
+    volumes:
+      - azurastreamer_tmp:/tmp/azurastreamer
+      - ./data:/app/data
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: [ "CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  azurastreamer_tmp:
+    driver: local
