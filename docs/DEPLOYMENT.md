@@ -62,18 +62,22 @@ accepts same-origin connections only.
 
 GHCR uses the built-in `GITHUB_TOKEN`; no registry secret is needed.
 
-## Disconnect the Vercel Git integration first
+## Check the Vercel Git integration before enabling the workflow
 
-`deploy-frontend-vercel.yml` is the single owner of dashboard deployments. A
-Vercel project (`azura-streamer`) is also wired directly to GitHub and deploys
-on its own whenever a branch is pushed.
+`deploy-frontend-vercel.yml` should be the single owner of dashboard
+deployments. A Vercel project named `azura-streamer` already exists and holds
+the `azura-streamer.vercel.app` alias from a one-off production deployment.
 
-Leaving both in place means every push deploys twice, from two different build
-paths, racing for the same production alias — and the Git integration's build
-does **not** generate `public/config.js`, so the dashboard it publishes would
-have no backend origin and the connection badge would never leave
-"Disconnected". Before enabling the workflow, disconnect the Git integration in
-**Vercel → project → Settings → Git**.
+It does **not** appear to be Git-connected — pushes to this repository produce
+no Vercel deployments or PR checks, unlike the sibling SYCO23 repository. Treat
+that as an observation rather than a guarantee and confirm in **Vercel →
+project → Settings → Git** before enabling the workflow.
+
+If a Git integration is connected, disconnect it. Otherwise every push deploys
+twice from two different build paths, racing for the same production alias —
+and the Git integration's build does **not** generate `public/config.js`, so the
+dashboard it publishes would have no backend origin and the connection badge
+would never leave "Disconnected".
 
 ## Vercel project variables
 
