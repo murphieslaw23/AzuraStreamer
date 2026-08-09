@@ -62,6 +62,19 @@ accepts same-origin connections only.
 
 GHCR uses the built-in `GITHUB_TOKEN`; no registry secret is needed.
 
+## Disconnect the Vercel Git integration first
+
+`deploy-frontend-vercel.yml` is the single owner of dashboard deployments. A
+Vercel project (`azura-streamer`) is also wired directly to GitHub and deploys
+on its own whenever a branch is pushed.
+
+Leaving both in place means every push deploys twice, from two different build
+paths, racing for the same production alias — and the Git integration's build
+does **not** generate `public/config.js`, so the dashboard it publishes would
+have no backend origin and the connection badge would never leave
+"Disconnected". Before enabling the workflow, disconnect the Git integration in
+**Vercel → project → Settings → Git**.
+
 ## Vercel project variables
 
 | Variable | Purpose | Example |
