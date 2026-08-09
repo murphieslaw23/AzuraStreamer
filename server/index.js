@@ -15,10 +15,31 @@ const AzuraClient    = require('./azuraClient');
 const StreamManager  = require('./streamManager');
 const { validateStreamStart } = require('./validator');
 
+// ── Deployment Topology ───────────────────────────────────────────────────────
+// The UI is served from this process in the all-in-one Docker deployment, and
+// from a separate static host in the split deployment. In the split case the
+// REST surface is reached through a same-origin proxy rewrite, but the Socket.io
+// connection is made cross-origin directly to this process — so the browser
+// origin has to be named here and the session cookie has to survive a
+// cross-site request.
+const PUBLIC_APP_ORIGINS = (process.env.PUBLIC_APP_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+const IS_PRODUCTION  = process.env.NODE_ENV === 'production';
+const CROSS_SITE_UI  = PUBLIC_APP_ORIGINS.length > 0;
+
 // ── App Setup ─────────────────────────────────────────────────────────────────
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: '*' } });
+const io     = new Server(server, {
+  // Same-origin only unless the UI is deployed elsewhere, in which case exactly
+  // those origins are allowed — never a wildcard, because the handshake carries
+  // the session cookie.
+  cors: CROSS_SITE_UI
+    ? { origin: PUBLIC_APP_ORIGINS, credentials: true }
+    : { origin: false }
+});
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 let azura;
@@ -36,15 +57,34 @@ let CFG = {
 app.set('trust proxy', 1);
 app.use(express.json());
 
+if (IS_PRODUCTION && !process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET must be set when NODE_ENV=production');
+}
+
 const sessionMiddleware = session({
   secret: process.env.SESSION_SECRET || 'azura-streamer-dev-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: {
+    httpOnly: true,
+    // A cross-site UI can only send the cookie with SameSite=None, which browsers
+    // accept only over HTTPS. Same-origin deployments keep the stricter default.
+    sameSite: CROSS_SITE_UI ? 'none' : 'lax',
+    secure: CROSS_SITE_UI || IS_PRODUCTION,
+    maxAge: 24 * 60 * 60 * 1000
+  }
 });
 
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
+
+// Dashboard data is live and per-session. Saying so explicitly keeps any proxy
+// or CDN in front of this process — including the static host's rewrite in the
+// split deployment — from serving one operator a cached view of another's.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 
 // auth.requireAuth used later in middleware
 
@@ -58,8 +98,9 @@ app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'ter
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve index at root
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+// Serve index at root. `public` sits beside the server sources in the image, so
+// this resolves the same way as the static middleware above.
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // ── Mock endpoints (for local testing without AzuraCast) ───────────────────
 app.get('/mock/azura/stations', (req, res) => {
@@ -131,6 +172,19 @@ async function poll() {
 // ── REST API ──────────────────────────────────────────────────────────────────
 
 // Authentication removed: login/setup endpoints disabled
+
+// Liveness for orchestrators and the deployment rollout gate. Deliberately does
+// not touch AzuraCast: an unreachable or unconfigured upstream is an operational
+// condition to surface in the UI, not a reason to declare this process dead and
+// trigger a rollback.
+app.get('/api/health', (req, res) => res.json({
+  ok: true,
+  data: {
+    uptime: process.uptime(),
+    azuracastConfigured: Boolean(settings.AZURACAST_API_URL),
+    timestamp: new Date().toISOString()
+  }
+}));
 
 app.get('/api/stations', async (req, res) => {
   try { res.json({ ok: true, data: await azura.getStations() }); }

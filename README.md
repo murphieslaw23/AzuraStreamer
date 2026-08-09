@@ -31,12 +31,19 @@ cd AzuraStreamer
 # 2. Run the automated setup (optional, installs Docker/Node/FFmpeg)
 sudo ./install.sh
 
-# 3. Build and start
+# 3. Create the environment file (SESSION_SECRET is required)
+cp .env.example .env
+printf 'SESSION_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
+
+# 4. Build and start
 docker compose up -d --build
 
-# 4. Open the UI
+# 5. Open the UI
 xdg-open http://localhost:3000
 ```
+
+For deploying the backend to IONOS and the dashboard to Vercel separately, see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ---
 
