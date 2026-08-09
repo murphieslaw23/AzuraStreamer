@@ -47,6 +47,39 @@ accepts same-origin connections only.
    `Upgrade`/`Connection` headers so Socket.io can establish a WebSocket.
 5. Add the deploy user's public key to `~/.ssh/authorized_keys`.
 
+## Sharing the VPS with the SYCO23 v5 runtime
+
+If you deploy onto `87.106.219.4`, that host is owned by the SYCO23 Multicast
+Control v5 deploy bundle, which runs its own Caddy bound to ports 80, 443 and
+443/udp and serves `api.syco23.org`.
+
+This backend is already built to coexist: `compose.prod.yml` binds only to
+loopback (`127.0.0.1:${AZURA_BIND_PORT}`) and expects an external reverse proxy.
+It must **not** be given its own Caddy or nginx on that host — the second one to
+start would fail to bind, and forcing it would take the v5 runtime off the air.
+
+To integrate, give this backend its own hostname (for example
+`azura.syco23.org`, DNS pointed at the same IP) and add a second site block to
+the bundle's Caddyfile at `/opt/syco23-multicast-control/current/Caddyfile`:
+
+```caddyfile
+azura.syco23.org {
+  encode zstd gzip
+  reverse_proxy host.docker.internal:3000 {
+    flush_interval -1
+  }
+}
+```
+
+Reach the loopback port from inside the Caddy container by adding
+`extra_hosts: ["host.docker.internal:host-gateway"]` to that Caddy service, or
+put both stacks on a shared Docker network and proxy to the container name
+instead. Reload with `docker compose up -d` in the bundle's directory — never
+`down -v`, which would destroy the v5 SQLite and Caddy certificate volumes.
+
+The `Upgrade`/`Connection` forwarding that Socket.io needs is handled by Caddy's
+`reverse_proxy` automatically.
+
 ## GitHub secrets
 
 | Secret | Purpose |
