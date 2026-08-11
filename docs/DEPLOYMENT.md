@@ -47,11 +47,12 @@ accepts same-origin connections only.
    `Upgrade`/`Connection` headers so Socket.io can establish a WebSocket.
 5. Add the deploy user's public key to `~/.ssh/authorized_keys`.
 
-## Sharing the VPS with the SYCO23 v5 runtime
+## Sharing the VPS with the SYCO23 runtime
 
 If you deploy onto `87.106.219.4`, that host is owned by the SYCO23 Multicast
-Control v5 deploy bundle, which runs its own Caddy bound to ports 80, 443 and
-443/udp and serves `api.syco23.org`.
+Control runtime, installed by that repository's `deploy/ionos/install.sh`. It
+runs its own Caddy (container `syco23-multicast-control-caddy`) bound to ports
+80, 443 and 443/udp, and serves `api.syco23.org`.
 
 This backend is already built to coexist: `compose.prod.yml` binds only to
 loopback (`127.0.0.1:${AZURA_BIND_PORT}`) and expects an external reverse proxy.
