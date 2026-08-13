@@ -1,12 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const path = require('node:path');
+const path = require('path');
 const os = require('node:os');
 
 const dbPath = path.join(os.tmpdir(), `azurastreamer-test-${Date.now()}.db`);
 process.env.DB_PATH = dbPath;
 
+// Use the original sqlite3-based db module for tests
+// This avoids native module compilation issues in CI
 const db = require('../server/db');
 
 test('persists and restores stream records', async () => {

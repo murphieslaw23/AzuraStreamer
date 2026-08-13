@@ -1,10 +1,22 @@
 'use strict';
 
-const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'server', 'data', 'azurastreamer.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'azurastreamer.db');
+
+// Try to use better-sqlite3 first (for production), fall back to sqlite3 (for tests/CI)
+let Database;
+let isBetterSqlite = false;
+
+try {
+  Database = require('better-sqlite3');
+  isBetterSqlite = true;
+} catch (err) {
+  // Fall back to sqlite3
+  Database = require('sqlite3').verbose();
+  isBetterSqlite = false;
+}
 
 class DatabaseManager {
   constructor() {
@@ -13,26 +25,32 @@ class DatabaseManager {
       fs.mkdirSync(dbDir, { recursive: true });
     }
     
-    // Configure database with WAL mode and optimized settings
-    this.db = new Database(DB_PATH, {
-      verbose: null,
-      fileMustExist: false,
-    });
-    
-    // Enable WAL mode for better concurrent access
-    this.db.pragma('journal_mode = WAL');
-    // Optimize synchronous behavior (NORMAL is good for most cases)
-    this.db.pragma('synchronous = NORMAL');
-    // Increase cache size for better performance
-    this.db.pragma('cache_size = -20000'); // 20MB cache
-    // Enable foreign keys
-    this.db.pragma('foreign_keys = ON');
-    
-    // Prepare statements for better performance
-    this.statements = {};
+    if (isBetterSqlite) {
+      // Use better-sqlite3 with WAL mode and optimized settings
+      this.db = new Database(DB_PATH, {
+        verbose: null,
+        fileMustExist: false,
+      });
+      
+      // Enable WAL mode for better concurrent access
+      this.db.pragma('journal_mode = WAL');
+      // Optimize synchronous behavior (NORMAL is good for most cases)
+      this.db.pragma('synchronous = NORMAL');
+      // Increase cache size for better performance
+      this.db.pragma('cache_size = -20000'); // 20MB cache
+      // Enable foreign keys
+      this.db.pragma('foreign_keys = ON');
+      
+      // Prepare statements for better performance
+      this.statements = {};
+    } else {
+      // Use sqlite3 with promise-based API
+      this.db = new Database.Database(DB_PATH);
+    }
   }
 
   prepare(sql) {
+    if (!isBetterSqlite) return null;
     if (!this.statements[sql]) {
       this.statements[sql] = this.db.prepare(sql);
     }
@@ -40,29 +58,56 @@ class DatabaseManager {
   }
 
   run(sql, params = []) {
-    const stmt = this.prepare(sql);
-    return stmt.run(...params);
+    if (isBetterSqlite) {
+      const stmt = this.prepare(sql);
+      return stmt.run(...params);
+    } else {
+      return new Promise((resolve, reject) => {
+        this.db.run(sql, params, function(err) {
+          if (err) reject(err);
+          else resolve(this);
+        });
+      });
+    }
   }
 
   get(sql, params = []) {
-    const stmt = this.prepare(sql);
-    return stmt.get(...params);
+    if (isBetterSqlite) {
+      const stmt = this.prepare(sql);
+      return stmt.get(...params);
+    } else {
+      return new Promise((resolve, reject) => {
+        this.db.get(sql, params, (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
+      });
+    }
   }
 
   all(sql, params = []) {
-    const stmt = this.prepare(sql);
-    return stmt.all(...params);
+    if (isBetterSqlite) {
+      const stmt = this.prepare(sql);
+      return stmt.all(...params);
+    } else {
+      return new Promise((resolve, reject) => {
+        this.db.all(sql, params, (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        });
+      });
+    }
   }
 
   async init() {
-    this.run(`
+    await this.run(`
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
         value TEXT
       )
     `);
 
-    this.run(`
+    await this.run(`
       CREATE TABLE IF NOT EXISTS stream_state (
         id TEXT PRIMARY KEY,
         stationId INTEGER,
@@ -100,20 +145,20 @@ class DatabaseManager {
     };
 
     for (const [key, val] of Object.entries(defaults)) {
-      this.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [key, val]);
+      await this.run(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`, [key, val]);
     }
   }
 
-  getSettings() {
-    const rows = this.all(`SELECT * FROM settings`);
+  async getSettings() {
+    const rows = await this.all(`SELECT * FROM settings`);
     return rows.reduce((acc, r) => { acc[r.key] = r.value; return acc; }, {});
   }
 
-  updateSetting(key, value) {
-    this.run(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, [key, String(value)]);
+  async updateSetting(key, value) {
+    await this.run(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`, [key, String(value)]);
   }
 
-  saveStreamState(stream) {
+  async saveStreamState(stream) {
     const payload = JSON.stringify({
       stationId: stream.stationId,
       stationName: stream.stationName,
@@ -136,7 +181,7 @@ class DatabaseManager {
       lastStartedAt: stream.lastStartedAt,
     });
 
-    this.run(`
+    await this.run(`
       INSERT INTO stream_state (id, stationId, stationName, platform, status, startedAt, dataDir, streamUrl, payload, updatedAt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(id) DO UPDATE SET
@@ -152,21 +197,21 @@ class DatabaseManager {
     `, [stream.id, stream.stationId ?? null, stream.stationName ?? null, stream.platform ?? null, stream.status ?? null, stream.startedAt ?? null, stream.dataDir ?? null, stream.streamUrl ?? null, payload]);
   }
 
-  getPersistedStreams() {
-    const rows = this.all(`SELECT * FROM stream_state ORDER BY updatedAt DESC`);
+  async getPersistedStreams() {
+    const rows = await this.all(`SELECT * FROM stream_state ORDER BY updatedAt DESC`);
     return rows.map(row => ({ ...row, payload: JSON.parse(row.payload || '{}') }));
   }
 
-  deletePersistedStream(id) {
-    this.run(`DELETE FROM stream_state WHERE id = ?`, [id]);
+  async deletePersistedStream(id) {
+    await this.run(`DELETE FROM stream_state WHERE id = ?`, [id]);
   }
 
-  clearPersistedStreams() {
-    this.run(`DELETE FROM stream_state`);
+  async clearPersistedStreams() {
+    await this.run(`DELETE FROM stream_state`);
   }
 
   close() {
-    if (this.db) {
+    if (this.db && !isBetterSqlite) {
       this.db.close();
     }
   }
