@@ -4,6 +4,9 @@ FROM node:20-slim as builder
 LABEL maintainer="AzuraStreamer"
 LABEL description="AzuraCast → YouTube/Twitch Live Stream Controller"
 
+# Skip puppeteer Chromium download in builder stage
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
 WORKDIR /app
 
 # Install build dependencies

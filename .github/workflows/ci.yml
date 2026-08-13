@@ -33,7 +33,7 @@ jobs:
             node --check "$file"
           done
       - name: Unit tests
-        run: node --test tests/*
+        run: node --test tests/*.test.js
 
   image:
     runs-on: ubuntu-latest
