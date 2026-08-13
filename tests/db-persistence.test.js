@@ -7,9 +7,24 @@ const os = require('node:os');
 const dbPath = path.join(os.tmpdir(), `azurastreamer-test-${Date.now()}.db`);
 process.env.DB_PATH = dbPath;
 
-// Use the original sqlite3-based db module for tests
-// This avoids native module compilation issues in CI
+// Force use of sqlite3 for tests by temporarily hiding better-sqlite3
+const originalRequire = require;
+const Module = require('module');
+const originalLoad = Module._load;
+
+// Intercept require calls to better-sqlite3 and make them fail
+Module._load = function(request, parent) {
+  if (request === 'better-sqlite3') {
+    throw new Error('better-sqlite3 not available in test environment');
+  }
+  return originalLoad.apply(this, arguments);
+};
+
+// Now require db - it will fall back to sqlite3
 const db = require('../server/db');
+
+// Restore original require
+Module._load = originalLoad;
 
 test('persists and restores stream records', async () => {
   await db.init();
