@@ -20,8 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      # There is no lockfile, so `npm ci` is not available. Committing
-      # server/package-lock.json would make these builds reproducible.
+      # Install server dependencies
       - name: Install server dependencies
         working-directory: server
         env:
@@ -34,7 +33,7 @@ jobs:
             node --check "$file"
           done
       - name: Unit tests
-        run: node --test tests/db-persistence.test.js
+        run: node --test tests/*
 
   image:
     runs-on: ubuntu-latest
@@ -50,9 +49,19 @@ jobs:
           tags: azurastreamer:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Security scan with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'azurastreamer:ci'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+      - name: Upload Trivy scan results to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
       - name: Boot the container and probe it
-        # Exercises the real image: the process must come up and answer on the
-        # API surface the healthcheck and the frontend both depend on.
         run: |
           set -euo pipefail
           docker run -d --name azurastreamer-ci -p 3000:3000 \

@@ -1,26 +1,48 @@
-FROM node:20-slim
+# Stage 1: Build dependencies
+FROM node:20-slim as builder
 
 LABEL maintainer="AzuraStreamer"
 LABEL description="AzuraCast → YouTube/Twitch Live Stream Controller"
 
-# Install ffmpeg + fonts + chromium deps for puppeteer
+WORKDIR /app
+
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+  python3 \
+  make \
+  g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+# Copy package files and install dependencies
+COPY server/package*.json ./
+RUN npm install --omit=dev
+
+# Stage 2: Runtime image
+FROM node:20-alpine
+
+LABEL maintainer="AzuraStreamer"
+LABEL description="AzuraCast → YouTube/Twitch Live Stream Controller"
+
+# Install runtime dependencies
+RUN apk add --no-cache --update \
   ffmpeg \
-  fonts-dejavu-core \
-  fonts-liberation \
+  font-dejavu \
   ca-certificates \
   chromium \
-  && rm -rf /var/lib/apt/lists/*
+  nss \
+  freetype \
+  harfbuzz \
+  ttf-freefont \
+  && update-ca-certificates
 
 # Skip puppeteer Chromium download, use system chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 WORKDIR /app
 
-# Install dependencies first (Docker cache layer)
-COPY server/package*.json ./
-RUN npm install --omit=dev
+# Copy node_modules from builder
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy server source
 COPY server/*.js ./

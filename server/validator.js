@@ -56,6 +56,19 @@ function validateStreamStart(params) {
     }
   }
 
+  // manualStreamKey validation
+  if (params.manualStreamKey) {
+    if (typeof params.manualStreamKey !== 'string' || params.manualStreamKey.trim().length === 0) {
+      errors.push(new ValidationError('manualStreamKey', 'must be a non-empty string'));
+    } else {
+      // Validate stream key format - should be alphanumeric with possible hyphens/underscores
+      const streamKeyPattern = /^[a-zA-Z0-9_-]{20,100}$/;
+      if (!streamKeyPattern.test(params.manualStreamKey.trim())) {
+        errors.push(new ValidationError('manualStreamKey', 'must be 20-100 alphanumeric characters with hyphens or underscores'));
+      }
+    }
+  }
+
   // title validation for auto-stream
   if (!params.manualStreamKey) {
     if (!params.title || typeof params.title !== 'string' || params.title.trim().length === 0) {

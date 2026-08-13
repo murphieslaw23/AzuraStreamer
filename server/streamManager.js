@@ -9,6 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const EventEmitter = require('events');
 const { validateDiskSpace } = require('./diskUtils');
 const db = require('./db');
+const streamStats = require('./streamStats');
 
 class StreamManager extends EventEmitter {
   constructor(config = {}) {
@@ -123,6 +124,7 @@ class StreamManager extends EventEmitter {
     };
 
     this.streams.set(id, info);
+    streamStats.recordStreamStart(id, stationId, platform);
     await this.persistStreamState(info);
     this.emit('stream:added', this.getSummary(info));
 
@@ -142,6 +144,7 @@ class StreamManager extends EventEmitter {
     await this.persistStreamState(s);
     this.emit('stream:updated', this.getSummary(s));
     this.cleanupStream(s, 5000);
+    await streamStats.recordStreamStop(id);
     return true;
   }
 
@@ -484,7 +487,7 @@ class StreamManager extends EventEmitter {
 
     return [
       ...inputArgs, '-filter_complex', filterComplex, '-map', '[vstream]', '-map', '0:a',
-      '-c:v', 'libx264', '-preset', 'superfast', '-tune', 'stillimage', '-b:v', '3000k', '-maxrate', '3500k', '-bufsize', '12000k',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '3000k', '-maxrate', '3500k', '-bufsize', '12000k',
       '-pix_fmt', 'yuv420p', '-g', '60', '-keyint_min', '60', '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
       '-f', 'flv', rtmpUrl, '-map', '[vprevout]', '-c:v', 'mjpeg', '-q:v', '5', '-pix_fmt', 'yuvj420p', '-f', 'image2', '-update', '1', path.join(dataDir, 'preview.jpg')
     ];

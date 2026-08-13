@@ -1,6 +1,9 @@
 'use strict';
 
 const express    = require('express');
+const { logger, httpLogger } = require('./logger');
+const { getMetrics, updateStreamMetrics, recordApiRequest, recordError } = require('./metrics');
+const rateLimit = require('express-rate-limit');
 const http       = require('http');
 const { Server } = require('socket.io');
 const path       = require('path');
@@ -9,6 +12,7 @@ const fs         = require('fs');
 // bcrypt handled in auth module
 
 const db             = require('./db');
+const streamStats     = require('./streamStats');
 const youtube        = require('./youtube');
 const twitch         = require('./twitch');
 const AzuraClient    = require('./azuraClient');
@@ -55,14 +59,33 @@ let CFG = {
 
 // ── Middlewares ───────────────────────────────────────────────────────────────
 app.set('trust proxy', 1);
-app.use(express.json());
 
-if (IS_PRODUCTION && !process.env.SESSION_SECRET) {
-  throw new Error('SESSION_SECRET must be set when NODE_ENV=production');
+// Rate limiting for API endpoints
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { ok: false, error: 'Too many requests, please try again after 15 minutes' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Stricter limiter for stream creation endpoints
+const streamCreationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10, // limit each IP to 10 stream creations per hour
+  message: { ok: false, error: 'Too many stream creations, please try again after 1 hour' },
+  keyGenerator: (req) => req.ip + (req.body.stationId || ''),
+  skip: (req) => process.env.DISABLE_RATE_LIMIT === 'true',
+});
+app.use(express.json());
+app.use(httpLogger);
+
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET environment variable is required in all environments');
 }
 
 const sessionMiddleware = session({
-  secret: process.env.SESSION_SECRET || 'azura-streamer-dev-secret',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -81,7 +104,7 @@ io.engine.use(sessionMiddleware);
 // Dashboard data is live and per-session. Saying so explicitly keeps any proxy
 // or CDN in front of this process — including the static host's rewrite in the
 // split deployment — from serving one operator a cached view of another's.
-app.use('/api', (req, res, next) => {
+app.use('/api', apiLimiter, (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
@@ -96,7 +119,7 @@ app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'ter
 
 // No authorization: serve *** files and APIs without auth checks
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
 
 // Serve index at root. `public` sits beside the server sources in the image, so
 // this resolves the same way as the static middleware above.
@@ -132,6 +155,7 @@ const broadcast = (event, data) => io.emit(event, data);
 
 // ── Logic: Polling ────────────────────────────────────────────────────────────
 async function poll() {
+  updateStreamMetrics(streamer.streams.values());
   try {
     const data = await azura.getNowPlaying();
     const transformed = data.map(AzuraClient.transformNowPlaying);
@@ -157,7 +181,7 @@ async function poll() {
       });
 
       if (np.nowPlaying.art && np.nowPlaying.art !== s.currentArtUrl) {
-        console.log(`[${s.id}] Art changed, restarting...`);
+        logger.info(`[${s.id}] Art changed, restarting...`);
         await streamer.downloadCover(np.nowPlaying.art, s.dataDir);
         s.currentArtUrl = np.nowPlaying.art;
         await streamer.restartFfmpeg(s);
@@ -165,7 +189,7 @@ async function poll() {
       broadcast('stream:update', streamer.getSummary(s));
     }
   } catch (err) {
-    console.error('[poll] Error:', err.message);
+    logger.error('[poll] Error:', err.message);
   }
 }
 
@@ -177,6 +201,7 @@ async function poll() {
 // not touch AzuraCast: an unreachable or unconfigured upstream is an operational
 // condition to surface in the UI, not a reason to declare this process dead and
 // trigger a rollback.
+app.get('/api/metrics', getMetrics);
 app.get('/api/health', (req, res) => res.json({
   ok: true,
   data: {
@@ -187,7 +212,20 @@ app.get('/api/health', (req, res) => res.json({
 }));
 
 app.get('/api/stations', async (req, res) => {
-  try { res.json({ ok: true, data: await azura.getStations() }); }
+  try { res.json({ ok: true, data: await azura.getStations() })
+
+app.get('/api/stats', async (req, res) => {
+  try {
+    const summary = await streamStats.getStatsSummary();
+
+    res.json({ ok: true, data: summary });
+
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Failed to get stats' });
+
+  }
+});
+; }
   catch (err) { res.status(502).json({ ok: false, error: err.message }); }
 });
 
@@ -198,7 +236,7 @@ app.get('/api/nowplaying', async (req, res) => {
 
 app.get('/api/streams', (req, res) => res.json({ ok: true, data: streamer.getAllSummaries() }));
 
-app.post('/api/streams/start', async (req, res) => {
+app.post('/api/streams/start', streamCreationLimiter, async (req, res) => {
   let { stationId, stationName, stationShortcode, listenUrl, platform, title, description, privacyStatus, template, manualStreamKey } = req.body;
   
   try {
@@ -312,7 +350,7 @@ app.post('/api/streams/start', async (req, res) => {
     // Sanitize error message
     const sanitizedMsg = err.message.length > 200 ? err.message.substring(0, 200) : err.message;
     res.status(500).json({ ok: false, error: 'Stream creation failed' });
-    console.error('[/api/streams/start] Error:', err);
+    logger.error('[/api/streams/start] Error:', err);
   }
 });
 
@@ -347,13 +385,14 @@ app.post('/api/settings', async (req, res) => {
     res.json({ ok: true });
   } catch (err) { 
     res.status(500).json({ ok: false, error: 'Settings update failed' });
-    console.error('[/api/settings POST] Error:', err);
+    logger.error('[/api/settings POST] Error:', err);
   }
 });
 
 // ── Initialization ────────────────────────────────────────────────────────────
 async function init() {
   await db.init();
+  await streamStats.init();
   settings = await db.getSettings();  // Cache settings at startup
 
   azura = new AzuraClient({ apiUrl: settings.AZURACAST_API_URL, apiKey: settings.AZURACAST_API_KEY });
@@ -378,12 +417,12 @@ async function init() {
   setInterval(poll, parseInt(settings.POLL_MS || '15000'));
   poll();
 
-  server.listen(CFG.PORT, () => console.log(`AzuraStreamer running on port ${CFG.PORT}`));
+  server.listen(CFG.PORT, () => logger.info(`AzuraStreamer running on port ${CFG.PORT}`));
 }
 
 // ── Graceful Shutdown ─────────────────────────────────────────────────────────
 async function shutdown() {
-  console.log('Shutting down gracefully...');
+  logger.info('Shutting down gracefully...');
   
   if (streamer) await streamer.shutdown();
   io.removeAllListeners();

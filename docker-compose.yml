@@ -27,6 +27,12 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
     healthcheck:
       test: [ "CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" ]
       interval: 30s
