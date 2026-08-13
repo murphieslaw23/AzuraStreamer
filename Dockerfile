@@ -9,11 +9,12 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies including unzip for puppeteer
 RUN apt-get update && apt-get install -y --no-install-recommends \
   python3 \
   make \
   g++ \
+  unzip \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy package files and install dependencies
