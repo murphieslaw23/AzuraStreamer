@@ -69,19 +69,48 @@ button, input, select { font-family: inherit; color: inherit; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  /* Defensive: if all our mobile rules fail, at least let actions wrap rather
+     than overflow the viewport. */
+  flex-wrap: wrap;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;            /* allow the brand block to shrink inside the flex */
 }
 
-.brand-icon { width: 36px; height: 36px; }
-.brand-name { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #a78bfa, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.brand > div:last-child {  /* the name+sub wrapper */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.brand-icon { width: 36px; height: 36px; flex-shrink: 0; }
+.brand-name { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #a78bfa, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; white-space: nowrap; }
 .brand-sub { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
 
-.header-actions { display: flex; align-items: center; gap: 12px; }
+.header-actions { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+
+/* The connection badge has no .badge rule in CSS — it relies on inheritance.
+   Define a minimal one so it doesn't sprawl and so we can compact it on
+   mobile (drop the text, keep the colored dot). */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+.badge--connecting { color: var(--text-muted); }
+.badge--connected  { color: var(--success); border-color: rgba(16, 185, 129, 0.3); background: rgba(16, 185, 129, 0.08); }
+.badge--error      { color: var(--danger);  border-color: rgba(239, 68, 68, 0.3);  background: rgba(239, 68, 68, 0.08); }
 
 .layout {
   max-width: 1200px;
@@ -468,6 +497,221 @@ button, input, select { font-family: inherit; color: inherit; }
 }
 
 .modal-overlay.active .modal { transform: translateY(0); }
+
+/* ── Mobile modal ───────────────────────────────────────────────────────────
+   The settings form has 30+ fields, so on a phone in portrait the modal
+   exceeds the viewport. Without these rules the overlay (display:flex,
+   align-items:center) clips the modal at top and bottom — the user can see
+   the first few fields but can never reach the Save button. Cap the modal
+   height to the dynamic viewport (100dvh handles iOS Safari's URL-bar
+   reflow), make the modal itself the scroll container, and pin the overlay
+   to the top of the screen so the modal's scroll origin is visible. The
+   inline-styled refresh-token rows stack via a class added below.
+*/
+@media (max-width: 899px) {
+  .modal-overlay {
+    align-items: flex-start;
+    padding: 16px;
+  }
+  .modal {
+    /* 100dvh = dynamic viewport height; falls back to 100vh in older browsers
+       via the second value. Subtract the overlay's 16px top+bottom padding. */
+    max-height: calc(100dvh - 32px);
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 20px;
+  }
+  /* iOS Safari zooms in on focused inputs with font-size < 16px. Bump inputs
+     on small screens so focusing a field doesn't re-zoom the whole modal. */
+  .form-input,
+  .form-select {
+    font-size: 16px;
+  }
+  /* The refresh-token field has three flex children (input + Test + Connect
+     Account). On a 360px-wide phone the input collapses to <120px and the
+     "Connect Account" label wraps. Stack: input full-width on top, then the
+     two buttons in a row beneath. */
+  .connect-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .connect-row .form-input { width: 100%; }
+  .connect-row .btn-connect-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .connect-row .btn-connect-row > * { flex: 1; }
+  /* The setup-guide boxes (YouTube / Twitch instructions) are wrapped in
+     inline-styled divs; they stack fine but their inline padding eats space.
+     Leave them alone; only fix the form-group margin so 30+ groups don't
+     compound. */
+  .form-group { margin-bottom: 16px; }
+}
+
+/* ── Mobile top-nav ─────────────────────────────────────────────────────────
+   The desktop header has 6 action items in a single flex row (badge +
+   settings + refresh + logout + privacy + terms). On a 360px-wide phone that
+   exceeds the viewport and breaks the layout at the top. Compact strategy:
+     • drop the brand subtitle ("Premium Live Bridge")
+     • shrink the connection badge to a colored dot only (the .badge-text is
+       hidden on mobile; status conveyed by color)
+     • push the least-used actions (privacy/terms) into an "overflow" menu
+       that's revealed by a small "···" button on the far right
+     • make sure the header itself doesn't grow taller than 52px
+   Result: 4 visible items on mobile (brand + dot + settings + refresh + menu)
+   instead of 6, all of which fit in 360px.
+*/
+@media (max-width: 600px) {
+  .site-header { height: 52px; }
+  .header-inner { padding: 0 8px; gap: 6px; }
+  .brand-icon { width: 30px; height: 30px; }
+  .brand-name { font-size: 16px; }
+  .brand-sub { display: none; }
+  .header-actions { gap: 4px; }
+
+  /* Compact badge: keep the dot, drop the text. The dot color tells the
+     user the status (gray=connecting, green=connected, red=error). */
+  .badge {
+    padding: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    justify-content: center;
+    gap: 0;
+    border-width: 1.5px;
+  }
+  .badge .badge-text { display: none; }
+  .badge .dot { width: 10px; height: 10px; }
+
+  /* Settings + refresh stay as visible icon buttons; their SVGs are
+     important and frequently used. */
+  #btn-settings, #btn-refresh { padding: 6px 8px; }
+
+  /* Hide the low-priority icon buttons (logout, privacy, terms) by default;
+     they're reachable via the "···" overflow menu. */
+  #btn-logout, .header-actions a[href="/privacy.html"], .header-actions a[href="/terms.html"] {
+    display: none;
+  }
+
+  /* The overflow menu button (added by app.js) is hidden on desktop, visible
+     on mobile. */
+  #btn-overflow { display: inline-flex; }
+
+  /* The overflow popover is positioned absolutely relative to its trigger.
+     The trigger is the last item in .header-actions. */
+  .overflow-menu {
+    position: absolute;
+    top: 52px;
+    right: 8px;
+    min-width: 180px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow);
+    padding: 6px;
+    z-index: 110;
+  }
+  .overflow-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+    text-align: left;
+    font-size: 13px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .overflow-menu-item:hover { background: rgba(255, 255, 255, 0.05); }
+  .overflow-menu-item svg { flex-shrink: 0; }
+
+  /* ── Mobile layout for stream-active elements ──────────────────────────
+     When a stream starts, three blocks become visible that were hidden on
+     initial load: the .stream-stats-bar (4-column stat grid), the
+     .preview-overlay (live feed), and the .stream-status-banner (LIVE/ERROR
+     pill). None of these had a mobile override, so on a 360px phone they
+     kept their desktop sizes — the 4-column stats grid crammed four ~80px
+     columns into the available 336px, the station hero tried to fit the
+     title and a status pill side-by-side, and the LIVE feed image broke
+     out of the 16:9 aspect-ratio container.
+
+     Below: make all three play nicely on mobile.
+  */
+
+  /* 4-column stats grid → 2×2 on phones. Each stat is wider, the
+     labels/values have more breathing room. */
+  .stream-stats-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .stream-stats-bar .stat-box {
+    padding: 10px 8px;
+  }
+  .stream-stats-bar .stat-label { font-size: 9px; }
+  .stream-stats-bar .stat-value { font-size: 11px; }
+
+  /* The station hero (title + ONLINE/LIVE badge + listener count) is
+     flex-row with space-between on desktop. On mobile the title can get
+     squeezed by the badges row; stack them so the title gets the full
+     width and the badges wrap onto a second row. */
+  .station-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .hero-badges {
+    flex-wrap: wrap;
+  }
+  .hero-title { font-size: 18px; }
+
+  /* The preview container's 16:9 aspect ratio is fine, but the embedded
+     .stream-preview (when live) had no max-width, so on a 360px phone the
+     1280×720 mjpeg could try to display at full natural size inside the
+     360px container. .preview-img already has width:100% (line 267), so
+     the only thing left is to ensure the container doesn't get a hard
+     height from anywhere and to keep the LIVE FEED pill readable. */
+  .preview-overlay-text { font-size: 9px; padding: 3px 6px; top: 8px; right: 8px; }
+
+  /* Now-playing hero: trim padding so the progress bar and time text fit
+     comfortably without squeezing the title. */
+  .now-playing-hero { padding: 12px 14px; }
+  .np-title-large { font-size: 16px; }
+  .np-artist-large { font-size: 13px; }
+
+  /* The stream-status-banner is a full-width pill; on mobile make it a
+     bit smaller and less padded so it doesn't dominate the screen. */
+  .stream-status-label { padding: 4px 10px; font-size: 10px; }
+}
+@media (min-width: 601px) {
+  /* Overflow menu is desktop-only hidden — on desktop all 6 items fit. */
+  #btn-overflow { display: none; }
+}
+
+/* Sticky save bar at the bottom of the modal so the primary action is always
+   one tap away regardless of scroll position. Mirrors the modal's background
+   with a slight blur so content scrolling under it stays readable. */
+.settings-save-bar {
+  position: sticky;
+  bottom: -20px;        /* offset matches the modal's mobile padding */
+  margin: 24px -20px -20px;
+  padding: 16px 20px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 2;
+}
+@media (min-width: 900px) {
+  .settings-save-bar {
+    bottom: -32px;
+    margin: 24px -32px -32px;
+    padding: 16px 32px;
+  }
+}
 
 /* ── Utility ──────────────────────────────────────────────────────────────── */
 

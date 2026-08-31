@@ -56,6 +56,12 @@
       <a href="/terms.html" class="btn btn--ghost btn--sm" title="Terms of Use">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
       </a>
+      <!-- Overflow menu: visible on mobile (≤600px), hidden on desktop. The
+           low-priority icon buttons (logout, privacy, terms) are hidden on
+           mobile and surfaced here as text rows. -->
+      <button id="btn-overflow" class="btn btn--ghost btn--sm" aria-label="More" aria-haspopup="true" aria-expanded="false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="5"  r="1.4" fill="currentColor"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="19" r="1.4" fill="currentColor"/></svg>
+      </button>
     </div>
   </div>
 </header>
@@ -190,13 +196,7 @@
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">Visual Template</label>
-              <select id="sel-template" class="form-select">
-                <option value="1">1. Minimal Bottom-Left</option>
-                <option value="2">2. Centered Harmonic</option>
-                <option value="3">3. Industrial (Default)</option>
-                <option value="4">4. Spinning Vinyl</option>
-              </select>
+              <p class="form-hint">Visual template is configured in Settings → Visual Template.</p>
             </div>
           </div>
 
@@ -265,10 +265,11 @@
       <div class="form-group">
         <label class="form-label">Default Visual Template</label>
         <select name="DEFAULT_TEMPLATE" class="form-select">
-          <option value="1">1. Minimal Bottom-Left</option>
-          <option value="2">2. Centered Harmonic</option>
-          <option value="3">3. Industrial (Default)</option>
-          <option value="4">4. Spinning Vinyl</option>
+          <option value="1">1. Frequency</option>
+          <option value="2">2. Monolith</option>
+          <option value="3">3. Waveform (Default)</option>
+          <option value="4">4. Turntable</option>
+          <option value="5">5. Warehouse</option>
         </select>
       </div>
 
@@ -298,10 +299,12 @@
       </div>
       <div class="form-group">
         <label class="form-label">YouTube Refresh Token</label>
-        <div style="display: flex; gap: 8px;">
+        <div class="connect-row" style="display: flex; gap: 8px;">
           <input name="YT_REFRESH_TOKEN" type="password" class="form-input" style="flex: 1;" readonly placeholder="Not connected" />
-          <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="youtube" style="padding: 6px 10px;">Test</button>
-          <button type="button" id="btn-connect-yt" class="btn btn--yt btn--sm">Connect Account</button>
+          <div class="btn-connect-row">
+            <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="youtube" style="padding: 6px 10px;">Test</button>
+            <button type="button" id="btn-connect-yt" class="btn btn--yt btn--sm">Connect Account</button>
+          </div>
         </div>
       </div>
 
@@ -333,13 +336,15 @@
       </div>
       <div class="form-group">
         <label class="form-label">Twitch Stream Key</label>
-        <div style="display: flex; gap: 8px;">
+        <div class="connect-row" style="display: flex; gap: 8px;">
           <input name="TWITCH_STREAM_KEY" type="password" class="form-input" style="flex: 1;" readonly placeholder="Not connected" />
-          <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="twitch" style="padding: 6px 10px;">Test</button>
-          <button type="button" id="btn-connect-tw" class="btn btn--tw btn--sm">Connect Account</button>
+          <div class="btn-connect-row">
+            <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="twitch" style="padding: 6px 10px;">Test</button>
+            <button type="button" id="btn-connect-tw" class="btn btn--tw btn--sm">Connect Account</button>
+          </div>
         </div>
       </div>
-      <div class="btn-group" style="display: flex; gap: 12px; margin-top: 24px;">
+      <div class="btn-group settings-save-bar" style="display: flex; gap: 12px;">
         <button type="submit" class="btn btn--primary btn--full">Save Settings</button>
       </div>
     </form>

@@ -168,7 +168,16 @@ class DatabaseManager {
       streamKey: stream.streamKey,
       rtmpUrl: stream.rtmpUrl,
       dataDir: stream.dataDir,
-      template: stream.template,
+      // Always store the template as a string. The UI form sends a number
+      // (parseInt of the <select> value) and the server's /api/streams/start
+      // resolves it from DEFAULT_TEMPLATE (also stored as a string in
+      // settings). buildArgs() matches with `=== '1' | '2' | '3' | '4' | '5'`, so
+      // the canonical form is a string. Without this coercion, a fresh
+      // stream-start produces template: 2 (number) in the DB, and on
+      // container restart restorePersistedStreams() resurrects the stream
+      // with the number, which buildArgs doesn't match and silently falls
+      // back to the default (else) branch.
+      template: stream.template != null ? String(stream.template) : null,
       streamUrl: stream.streamUrl,
       status: stream.status,
       startedAt: stream.startedAt,

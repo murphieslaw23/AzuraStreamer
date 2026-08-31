@@ -1,7 +1,7 @@
 'use strict';
 
 const VALID_PLATFORMS = ['youtube', 'twitch'];
-const VALID_TEMPLATES = ['1', '2', '3', '4'];
+const VALID_TEMPLATES = ['1', '2', '3', '4', '5'];
 
 class ValidationError extends Error {
   constructor(field, message) {

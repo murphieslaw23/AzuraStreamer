@@ -26,7 +26,6 @@ class AzuraClient {
     if (!this.apiUrl || !this.apiKey) {
       throw new Error('AzuraCast API not configured');
     }
-
     try {
       const response = await axios.get(`${this.apiUrl}${endpoint}`, {
         headers: { 'X-API-Key': this.apiKey },

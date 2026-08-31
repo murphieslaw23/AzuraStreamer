@@ -19,6 +19,43 @@ class StreamManager extends EventEmitter {
     this.maxConcurrentStreams = config.maxConcurrentStreams || 3;
   }
 
+  // Classify an ffmpeg exit + stderr buffer into a failure kind. The
+  // restart loop uses this to decide between "retry with backoff" and
+  // "fail fast, no point retrying" — a missing input file, a malformed
+  // filter graph, or a bad stream key will never succeed on retry, so
+  // burning 10 attempts × backoff = 3 minutes of confusion is hostile
+  // UX. Returns one of:
+  //   'permanent' — config/argument error; do NOT retry
+  //   'transient' — network/RTMP drop; safe to retry with backoff
+  //   'unknown'   — could be either; retry once, then treat as permanent
+  static classifyFailure(stderrBuf, exitCode) {
+    const hay = (stderrBuf || '').toLowerCase();
+    // Exit 0 = success (shouldn't reach here, but defensive).
+    if (exitCode === 0) return 'transient';
+    // Permanent ffmpeg / config errors — same root cause every retry.
+    if (/no such file or directory/.test(hay))         return 'permanent';
+    if (/invalid argument/.test(hay))                 return 'permanent';
+    if (/option not found/.test(hay))                 return 'permanent';
+    if (/no such filter/.test(hay))                   return 'permanent';
+    if (/error initializing complex filters/.test(hay)) return 'permanent';
+    if (/protocol not found/.test(hay))               return 'permanent';
+    if (/unknown encoder/.test(hay))                  return 'permanent';
+    if (/unknown format/.test(hay))                   return 'permanent';
+    if (/error parsing options/.test(hay))            return 'permanent';
+    if (/unrecognized option/.test(hay))              return 'permanent';
+    if (/bad request|invalid stream key|auth/i.test(hay)) return 'permanent';
+    // Transient — network / ingest / source issues.
+    if (/connection (refused|reset|timed out)/.test(hay)) return 'transient';
+    if (/network is unreachable/.test(hay))           return 'transient';
+    if (/i\/o error/.test(hay))                       return 'transient';
+    if (/rtmp_/.test(hay))                            return 'transient';
+    if (/server closed connection/.test(hay))         return 'transient';
+    if (/404 not found|503|504/.test(hay))            return 'transient';
+    if (/operation timed out/.test(hay))              return 'transient';
+    if (/broken pipe/.test(hay))                      return 'transient';
+    return 'unknown';
+  }
+
   updateConfig(newConfig) {
     this.config = { ...this.config, ...newConfig };
   }
@@ -70,11 +107,120 @@ class StreamManager extends EventEmitter {
       this.emit('stream:added', this.getSummary(info));
 
       if (['live', 'starting', 'reconnecting'].includes(info.status)) {
-        await this.spawnFfmpeg(info);
+        // Probe listenUrl before spawning ffmpeg so a dead AzuraCast mount is
+        // surfaced immediately instead of burning the 30s startup timeout.
+        // preflightCheck() may rewrite info.listenUrl to a reachable variant
+        // (e.g. https://... → http://... if the upstream has a self-signed
+        // cert that Node rejects but ffmpeg's gnutls accepts).
+        const probe = await this.preflightCheck(info);
+        if (probe.ok) {
+          await this.spawnFfmpeg(info);
+        } else {
+          info.status = 'error';
+          info.errorMessage = `Upstream listenUrl unreachable: ${info.listenUrl}`;
+          this.persistStreamState(info).catch(() => {});
+          this.emit('stream:updated', this.getSummary(info));
+          this.emit('log:system', {
+            message: `[${info.platform}] Preflight failed: ${info.errorMessage}`,
+            type: 'error',
+          });
+        }
       }
     }
 
     return rows;
+  }
+
+  // Probe listenUrl with a bounded GET before spawning ffmpeg. The probe
+  // tries the URL the UI supplied first (preserving any protocol the
+  // operator explicitly chose) and falls back to the other scheme on
+  // TLS/connection failures. This matters because:
+  //   * AzuraCast typically serves its :8000 mount over plain HTTP, but
+  //     exposes the same URL as https:// when the deployment has a
+  //     self-signed cert in front of port 8000 (e.g. an IONOS default
+  //     page). Node's strict TLS verification rejects self-signed certs
+  //     and would block every stream start against such a deployment.
+  //   * ffmpeg's gnutls stack is more permissive and would have worked,
+  //     so the preflight was the only thing standing in the way.
+  //
+  // Returns { ok, url } where `url` is the canonical form that worked
+  // (callers should use it for the actual ffmpeg spawn).
+  async preflightCheck(info) {
+    if (!info.listenUrl) return { ok: false, url: null };
+    const original = info.listenUrl;
+
+    // Build both candidates: original-protocol first, other-protocol second.
+    const candidates = [];
+    try {
+      const u = new URL(original);
+      if (u.protocol === 'https:') {
+        candidates.push(original);
+        candidates.push(`http://${u.host}${u.pathname}${u.search}`);
+      } else if (u.protocol === 'http:') {
+        candidates.push(original);
+        candidates.push(`https://${u.host}${u.pathname}${u.search}`);
+      } else {
+        return { ok: false, url: null };
+      }
+    } catch (_) {
+      return { ok: false, url: null };
+    }
+
+    for (const url of candidates) {
+      const result = await this._probeOnce(url);
+      if (result.ok) {
+        if (url !== original) {
+          // We fell back. Update the info record so the ffmpeg spawn uses
+          // the same URL we just verified reachable.
+          info.listenUrl = url;
+        }
+        return { ok: true, url };
+      }
+    }
+    return { ok: false, url: null };
+  }
+
+  // One bounded probe. For a live audio stream the response never ends, so
+  // we resolve on the FIRST of:
+  //   • response headers received (status code 2xx/3xx → reachable)
+  //   • first chunk of body received (definitely live — 200 with bytes flowing)
+  //   • request error / timeout
+  // The 5s timeout caps the worst case; in practice we resolve in <500ms.
+  _probeOnce(url) {
+    return new Promise((resolve) => {
+      let parsed;
+      try { parsed = new URL(url); } catch (_) { return resolve({ ok: false }); }
+      const lib = parsed.protocol === 'https:' ? require('https') : require('http');
+      let settled = false;
+      const settle = (ok) => { if (!settled) { settled = true; resolve({ ok }); } };
+      const req = lib.request(url, {
+        method: 'GET',
+        timeout: 5000,
+        headers: {
+          'User-Agent': 'AzuraStreamer-preflight/1.0',
+          'Icy-MetaData': '1',
+          'Accept': '*/*'
+        }
+      }, (res) => {
+        const code = res.statusCode;
+        if (code >= 200 && code < 400) {
+          // Headers are good. Resolve now; we don't need any audio bytes.
+          // Detach the response so we don't leak sockets on long-running streams.
+          settle(true);
+          // Keep draining briefly to avoid RST on a still-open socket, then close.
+          res.on('data', () => {});
+          setTimeout(() => { try { res.destroy(); } catch (_) {} try { req.destroy(); } catch (_) {} }, 200);
+        } else {
+          // 4xx/5xx — upstream is alive but the URL is wrong. Resolve false.
+          settle(false);
+          res.resume();
+          setTimeout(() => { try { res.destroy(); } catch (_) {} try { req.destroy(); } catch (_) {} }, 200);
+        }
+      });
+      req.on('timeout', () => { try { req.destroy(); } catch (_) {} settle(false); });
+      req.on('error',   () => settle(false));
+      req.end();
+    });
   }
 
   async startStream(params) {
@@ -134,13 +280,19 @@ class StreamManager extends EventEmitter {
   async stopStream(id) {
     const s = this.streams.get(id);
     if (!s) return false;
-    
+
+    // Cancel any pending reconnect timer BEFORE setting status, so the
+    // timer's own status check (=== 'reconnecting') doesn't race and
+    // re-spawn ffmpeg after the user asked to stop.
+    if (s._reconnectTimer) { clearTimeout(s._reconnectTimer); s._reconnectTimer = null; }
+    if (s._ffmpegStartTimeout) { clearTimeout(s._ffmpegStartTimeout); s._ffmpegStartTimeout = null; }
+
     s.status = 'stopped';
     if (s.process) {
       try { s.process.kill('SIGTERM'); } catch(_) {}
       setTimeout(() => { if (s.process) try { s.process.kill('SIGKILL'); } catch(_) {} }, 3000);
     }
-    
+
     await this.persistStreamState(s);
     this.emit('stream:updated', this.getSummary(s));
     this.cleanupStream(s, 5000);
@@ -197,12 +349,17 @@ class StreamManager extends EventEmitter {
       }
     }, 30000);
 
+    // Stash the most recent stderr on `info` so the close handler can
+    // classify the failure (and so a follow-up tool can read it). Bound
+    // it to 4 KB to keep memory in check across long-lived streams.
+    info._lastStderr = '';
     let stderrBuf = '';
     proc.stderr.on('data', (chunk) => {
       const s = chunk.toString();
       stderrBuf += s;
       
       if (stderrBuf.length > 4096) stderrBuf = stderrBuf.slice(-4096);
+      info._lastStderr = stderrBuf;
       
       if ((info.status === 'starting' || info.status === 'reconnecting') && stderrBuf.includes('fps=')) {
         info.status = 'live';
@@ -236,11 +393,11 @@ class StreamManager extends EventEmitter {
     });
 
     proc.on('close', async (code) => {
-      this.emit('log:system', { 
-        message: `[${info.platform}] ffmpeg exited with code ${code}`, 
-        type: code === 0 ? 'info' : 'error' 
+      this.emit('log:system', {
+        message: `[${info.platform}] ffmpeg exited with code ${code}`,
+        type: code === 0 ? 'info' : 'error'
       });
-      
+
       info.process = null;
 
       if (info._restarting) {
@@ -253,10 +410,32 @@ class StreamManager extends EventEmitter {
         return;
       }
 
-      // Reconnection Logic
+      // Classify the failure to decide whether retrying makes sense.
+      // A missing file / bad filter graph / wrong stream key will never
+      // succeed on retry — fail fast so the operator sees a clear error
+      // instead of "Max retries reached" 3 minutes later.
+      const failureKind = StreamManager.classifyFailure(info._lastStderr || stderrBuf, code);
+      const lastStderr = (info._lastStderr || stderrBuf || '').slice(-300);
+
+      if (failureKind === 'permanent') {
+        this.emit('log:system', {
+          message: `[${info.platform}] ffmpeg failed permanently (no retry): ${lastStderr}`,
+          type: 'error',
+        });
+        info.status = 'error';
+        info.errorMessage = `Permanent ffmpeg error: ${lastStderr}`;
+        // Cancel any pending reconnect from a previous close.
+        if (info._reconnectTimer) { clearTimeout(info._reconnectTimer); info._reconnectTimer = null; }
+        this.persistStreamState(info).catch(() => {});
+        this.emit('stream:updated', this.getSummary(info));
+        this.cleanupStream(info, 60000);
+        return;
+      }
+
+      // Reconnection Logic (transient / unknown)
       info.retryCount = (info.retryCount || 0) + 1;
       const maxRetries = 10;
-      
+
       if (info.retryCount <= maxRetries) {
         const delay = Math.min(1000 * Math.pow(2, info.retryCount - 1), 30000);
         info.status = 'reconnecting';
@@ -264,12 +443,23 @@ class StreamManager extends EventEmitter {
         this.persistStreamState(info).catch(() => {});
         this.emit('stream:updated', this.getSummary(info));
 
-        setTimeout(() => {
+        // Guard against overlapping reconnect timers. Without this, two
+        // close events fired back-to-back (or a manual stop racing with
+        // a retry) could leave two pending setTimeouts, each spawning
+        // a fresh ffmpeg and corrupting the lifecycle.
+        if (info._reconnectTimer) clearTimeout(info._reconnectTimer);
+        info._reconnectTimer = setTimeout(() => {
+          info._reconnectTimer = null;
           if (info.status === 'reconnecting') this.spawnFfmpeg(info);
         }, delay);
       } else {
+        this.emit('log:system', {
+          message: `[${info.platform}] ffmpeg gave up after ${maxRetries} retries: ${lastStderr}`,
+          type: 'error',
+        });
         info.status = 'error';
-        info.errorMessage = `Max retries reached. ${stderrBuf.slice(-200)}`;
+        info.errorMessage = `Max retries reached. ${lastStderr}`;
+        if (info._reconnectTimer) { clearTimeout(info._reconnectTimer); info._reconnectTimer = null; }
         this.persistStreamState(info).catch(() => {});
         this.emit('stream:updated', this.getSummary(info));
         this.cleanupStream(info, 60000);
@@ -354,8 +544,22 @@ class StreamManager extends EventEmitter {
 
   // ── Asset Management ───────────────────────────────────────────────────────
 
+  // Sanitize artist/title/next text for ffmpeg's drawtext filter. The text
+  // is written to a file and read back via `textfile=...:text=...` — ffmpeg
+  // reads the file as UTF-8 and draws whatever bytes are in it, so the
+  // only characters we need to strip are those that would break the file
+  // path or ffmpeg's text parsing:
+  //   • newlines (\n, \r) — would split the title into multiple lines and
+  //     break the drawtext textfile parser
+  //   • null byte (\0) — would truncate the file
+  //   • backslash (\) — drawtext treats this as an escape char; a stray
+  //     backslash inside a title could change the visual output
+  // Everything else (including @, #, :, /, accented Latin, CJK, emoji)
+  // passes through. The previous whitelist ([\w\s\-\.\(\)\[\]\!\?\&\,\'\"])
+  // was too restrictive and silently corrupted real titles — for example
+  // "Live@Obk Dfk" became "Live Obk Dfk" because @ wasn't in the set.
   async writeMeta(dataDir, meta) {
-    const sanitize = (t) => String(t || '').replace(/[^\w\s\-\.\(\)\[\]\!\?\&\,\'\"]/gi, ' ').replace(/\s+/g, ' ').trim();
+    const sanitize = (t) => String(t || '').replace(/[\n\r\\]/g, ' ').replace(/\s+/g, ' ').trim();
     const pairs = [
       ['artist.txt', meta.artist || ''],
       ['title.txt',  meta.title  || ''],
@@ -371,6 +575,14 @@ class StreamManager extends EventEmitter {
     const bgPath    = path.join(dataDir, 'bg.png');
     const roundPath = path.join(dataDir, 'cover_round.png');
     const { W, H } = this.config;
+
+    // Template-specific static assets MUST exist in dataDir before ffmpeg
+    // is spawned (the filter graph references them by absolute path).
+    // Failing to copy warehouse-bg.jpg here is what caused the
+    // "restart loop" symptom in the August 30 incident — every retry hit
+    // the same permanent "No such file or directory" error for 3 minutes
+    // before the loop gave up.
+    await this.ensureTemplateAssets(dataDir);
 
     if (!artUrl) {
       await this.generatePlaceholders(dataDir);
@@ -417,73 +629,254 @@ class StreamManager extends EventEmitter {
     cmds.forEach(cmd => { try { execSync(cmd, { timeout: 5000, stdio: 'ignore' }); } catch(e) {} });
   }
 
+  // Copy template-specific static brand assets (warehouse background,
+  // future additions) from BRAND_BG_DIR into the stream's dataDir. These
+  // files are referenced as absolute paths in the ffmpeg filter graph,
+  // so a missing file kills ffmpeg in milliseconds and the restart loop
+  // burns 3 minutes retrying the same permanent error.
+  //
+  // Idempotent: if the destination already exists, the copy is skipped.
+  // If the source is missing, a clear error is logged (and the stream
+  // will fail fast at spawn time, which is the desired behavior).
+  async ensureTemplateAssets(dataDir) {
+    const { BRAND_BG_DIR } = this.config;
+    if (!BRAND_BG_DIR) {
+      // Older deployment without BRAND_BG_DIR configured — fall through,
+      // the existing failure mode (spawn → "No such file") still happens
+      // but at least we don't crash here.
+      this.emit('log:system', {
+        message: '[StreamManager] ensureTemplateAssets: BRAND_BG_DIR not set; template static assets may be missing',
+        type: 'warn',
+      });
+      return;
+    }
+
+    const assets = [
+      // [sourceFile, destFile, requiredForTemplate]
+      { src: 'warehouse-bg.jpg', dest: 'warehouse-bg.jpg', requiredFor: '5' },
+      // Add more here as templates are added.
+    ];
+
+    for (const { src, dest } of assets) {
+      const srcPath  = path.join(BRAND_BG_DIR, src);
+      const destPath = path.join(dataDir, dest);
+      try {
+        const [st] = await Promise.all([fsp.stat(srcPath)]);
+        if (!st.isFile()) throw new Error('not a regular file');
+        // Skip if already present and non-empty (idempotent across retries).
+        try {
+          const dst = await fsp.stat(destPath);
+          if (dst.isFile() && dst.size > 0) continue;
+        } catch (_) { /* missing — proceed to copy */ }
+        await fsp.copyFile(srcPath, destPath);
+      } catch (err) {
+        this.emit('log:system', {
+          message: `[StreamManager] ensureTemplateAssets: cannot copy ${src} from ${srcPath} — ${err.message}`,
+          type: 'warn',
+        });
+      }
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
 
   buildArgs(s) {
     const { listenUrl, rtmpUrl, dataDir, platform, template } = s;
-    const { W, H, FONT, FONT_BOLD } = this.config;
-    const COVER_SIZE = 360;
-    const COVER_X = 80;
+    const {
+      W, H,
+      FONT_DISPLAY, FONT_DISPLAY_BLK, FONT_BODY, FONT_MONO,
+      BRAND_NAME, BRAND_HOME, BRAND_TAGLINE,
+    } = this.config;
     const tf = (f) => path.join(dataDir, f);
-    const waveColor = platform === 'youtube' ? '0xCC2222@0.6' : '0x7B3FBF@0.6';
+
+    // Shared color tokens (inlined into drawtext). One accent, one ink,
+    // one dim ink. Sharp contrast only — underground station, not Spotify.
+    // RED is a deep arterial blood-red (≈ Pantone 1797 / Bloor red) — the
+    // user wanted the old "signal red" replaced with a more visceral tone.
+    const INK     = '0xE6EAF2';
+    const INK_DIM = '0x9AA3B2';
+    const RED     = '0xC8102E';
+    const RED_S   = '0xC8102E@0.6';
+    const RED_F   = '0xC8102E@0.18';
+    const BG      = '0x06070B';
+
+    // Fragments reused across all templates
+    const coverFile = template === '4' ? 'cover_round.png' : 'cover.png';
+    // Left-aligned (templates 1-4): original chip and brand mark
+    const onAirChip = `drawtext=text='// ON AIR   ${BRAND_NAME}':fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK}@0.85:x=22:y=26,drawtext=text='SYCO':fontfile='${FONT_DISPLAY_BLK}':fontsize=14:fontcolor=${RED}@0.9:x=22:y=46`;
+    // "SYCO23.ORG" is 9 chars in Barlow Condensed Bold 18pt; measured
+    // width is ~135px. Right-align by placing x = W - 135 - 22 (right
+    // margin). drawtext's `text_align=right` isn't supported in this
+    // ffmpeg build, so we hard-code the offset.
+    const brandX = W - 135 - 22;
+    const brandMark = `drawtext=text='${BRAND_HOME}':fontfile='${FONT_DISPLAY}':fontsize=18:fontcolor=${RED}@0.9:x=${brandX}:y=${H - 32},drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=11:fontcolor=${INK_DIM}@0.7:x=22:y=${H - 32}`;
+    // Right-aligned variants (template 5 — soundsystem on the left
+    // forces all text to the right column).
+    const rightColX = W - 410;   // left edge of the right-aligned column
+    const onAirChipRight = `drawtext=text='// ON AIR   ${BRAND_NAME}':fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK}@0.85:x=${rightColX}:y=26,drawtext=text='SYCO':fontfile='${FONT_DISPLAY_BLK}':fontsize=14:fontcolor=${RED}@0.9:x=${rightColX}:y=46`;
+    const taglineRight = `drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=11:fontcolor=${INK_DIM}@0.7:x=${rightColX}:y=${H - 32}`;
+    const previewBranch = `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`;
+
+    let filterComplex = '';
+    let prevLabel = '[vout]';
+
+    if (template === '1') {
+      // FREQUENCY — engineering / spectrum analyzer. Cover in the lower
+      // left at 280×280 with a thin red border. A red carrier line at
+      // y=420 with 9 vertical tick marks reads as a "spectrum analyzer
+      // grid." Title + artist below the carrier, with an upcoming-track
+      // line in mono.
+      const covSize = 280, covX = 70, covY = 380;
+      let ticks = '';
+      for (let i = 1; i < 10; i++) {
+        const x = Math.round((W / 10) * i);
+        ticks += `,drawbox=x=${x - 1}:y=410:w=2:h=20:color=${RED}@0.55:t=fill`;
+      }
+      filterComplex = [
+        `[0:a]showfreqs=s=560x56:mode=bar:colors=${RED_S}:fscale=log:rate=30,format=yuv420p[freq]`,
+        `[1:v]format=yuv420p,boxblur=20:1[bgblur]`,
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.6:t=fill[bg]`,
+        `[bg][freq]overlay=x=${W - 580}:y=70[v0]`,
+        `[v0]${onAirChip.replace(/drawtext/g, 'drawtext').replace('x=22:y=26', 'x=22:y=160')}[v1]`,
+        `[2:v]format=yuv420p,scale=${covSize}:${covSize},drawbox=x=4:y=4:w=${covSize - 8}:h=${covSize - 8}:color=${RED}@0.9:t=2[cov]`,
+        `[v1][cov]overlay=x=${covX}:y=${covY}[v2]`,
+        `[v2]drawbox=x=0:y=420:w=${W}:h=2:color=${RED}:t=fill${ticks}[v3]`,
+        `[v3]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=40:fontcolor=${INK}:x=${covX + covSize + 40}:y=${covY + 30},drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_BODY}':fontsize=22:fontcolor=${INK_DIM}@0.85:x=${covX + covSize + 42}:y=${covY + 86},drawtext=textfile='${tf('next.txt')}':reload=1:fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK_DIM}@0.5:x=${covX + covSize + 42}:y=${covY + 124}[v4]`,
+        `[v4]${brandMark}[vout]`,
+        `[vout]split=2[vstream][vprev_in]`,
+        previewBranch
+      ].join(';');
+    }
+    else if (template === '2') {
+      // MONOLITH — centered, poster-like. 360×360 cover centered, with
+      // a huge Barlow Condensed title below it, prefixed by a `//` accent.
+      // A 4px red carrier at y=620 frames the bottom.
+      const covSize = 360, covX = (W - covSize) / 2, covY = 100;
+      filterComplex = [
+        `[1:v]format=yuv420p,boxblur=24:1[bgblur]`,
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.7:t=fill[bg]`,
+        `[2:v]format=yuv420p,scale=${covSize}:${covSize},drawbox=x=4:y=4:w=${covSize - 8}:h=${covSize - 8}:color=${RED}:t=2[cov]`,
+        `[bg][cov]overlay=x=${covX}:y=${covY}[v1]`,
+        `[v1]${onAirChip}[v2]`,
+        `[v2]drawtext=text='//':fontfile='${FONT_DISPLAY}':fontsize=80:fontcolor=${RED}@0.9:x=70:y=478,drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=56:fontcolor=${INK}:x=160:y=510,drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_BODY}':fontsize=18:fontcolor=${INK_DIM}@0.85:x=162:y=572,drawtext=textfile='${tf('next.txt')}':reload=1:fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK_DIM}@0.5:x=162:y=604[v3]`,
+        `[v3]drawbox=x=0:y=620:w=${W}:h=4:color=${RED}:t=fill[v4]`,
+        `[v4]${brandMark}[vout]`,
+        `[vout]split=2[vstream][vprev_in]`,
+        previewBranch
+      ].join(';');
+    }
+    else if (template === '3') {
+      // WAVEFORM — the new "industrial default." A live waveform band
+      // across the top (the actual audio in showwaves), then a red
+      // carrier at y=240. Cover upper-right, 240×240, with red border.
+      // Title + artist in lower-left.
+      const covSize = 240, covX = W - covSize - 70, covY = 290;
+      filterComplex = [
+        `[0:a]showwaves=s=${W}x140:mode=cline:colors=${RED}:scale=lin:rate=30,format=yuv420p[wave]`,
+        `[1:v]format=yuv420p,boxblur=20:1[bgblur]`,
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.6:t=fill[bg]`,
+        `[bg][wave]overlay=x=0:y=60[v1]`,
+        `[v1]drawbox=x=0:y=240:w=${W}:h=2:color=${RED}:t=fill[v2]`,
+        `[2:v]format=yuv420p,scale=${covSize}:${covSize},drawbox=x=4:y=4:w=${covSize - 8}:h=${covSize - 8}:color=${RED}@0.85:t=2[cov]`,
+        `[v2][cov]overlay=x=${covX}:y=${covY}[v3]`,
+        `[v3]${onAirChip}[v4]`,
+        `[v4]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=42:fontcolor=${INK}:x=70:y=470,drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_BODY}':fontsize=22:fontcolor=${INK_DIM}@0.85:x=72:y=520,drawtext=textfile='${tf('next.txt')}':reload=1:fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK_DIM}@0.5:x=72:y=558[v5]`,
+        `[v5]${brandMark}[vout]`,
+        `[vout]split=2[vstream][vprev_in]`,
+        previewBranch
+      ].join(';');
+    }
+    else if (template === '4') {
+      // TURNTABLE — the spinning vinyl, redesigned. 320×320 round disc
+      // at (90, 200) spinning at 1 rev per 8s (a=t*PI/4 — half the speed
+      // of the old design, more like a real vinyl). A red center label
+      // with "SYCO" inside the disc gives it identity. Carrier line at
+      // y=560 cuts the lower half of the disc. Title/artist in a column
+      // to the right of the disc.
+      const covSize = 320, covX = 90, covY = 200;
+      const lblX = covX + covSize / 2, lblY = covY + covSize / 2;
+      filterComplex = [
+        `[1:v]format=yuv420p,boxblur=24:1[bgblur]`,
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.7:t=fill[bg]`,
+        `[2:v]format=yuv420p,rotate=a=t*PI/4:c=none[spinning]`,
+        `[bg][spinning]overlay=x=${covX}:y=${covY}[v1]`,
+        // Center label: a red disc with the white "SYCO" carved out.
+        `[v1]drawbox=x=${lblX - 50}:y=${lblY - 50}:w=100:h=100:color=${RED}:t=fill[label_bg]`,
+        `[label_bg]drawtext=text='SYCO':fontfile='${FONT_DISPLAY_BLK}':fontsize=22:fontcolor=${INK}:x=${lblX - 32}:y=${lblY - 16}[label_out]`,
+        `[v1][label_out]overlay=x=0:y=0[v2]`,
+        `[v2]${onAirChip}[v3]`,
+        // Right-side metadata column
+        `[v3]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=44:fontcolor=${INK}:x=${covX + covSize + 60}:y=240,drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_BODY}':fontsize=22:fontcolor=${INK_DIM}@0.85:x=${covX + covSize + 60}:y=300,drawtext=textfile='${tf('next.txt')}':reload=1:fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK_DIM}@0.5:x=${covX + covSize + 60}:y=336[v4]`,
+        `[v4]drawbox=x=0:y=560:w=${W}:h=2:color=${RED}:t=fill[v5]`,
+        `[v5]${brandMark}[vout]`,
+        `[vout]split=2[vstream][vprev_in]`,
+        previewBranch
+      ].join(';');
+    }
+    else if (template === '5') {
+      // WAREHOUSE — the soundsystem itself is the subject. The user's
+      // reference image is a dark concrete warehouse with a massive
+      // speaker stack on the left; we use it as the live background
+      // and center the metadata in the bottom half. Per the 2026-08-31
+      // design pass: no waveform, no red carrier / floor / accent lines,
+      // metadata block is centered horizontally and sits in the lower
+      // half of the frame.
+      //
+      // Layout (W=1280, H=720):
+      //   - Warehouse image as background, blurred and dimmed.
+      //   - "// ON AIR  SYSTEM CORRUPT" chip top-left.
+      //   - "SYCO23.ORG" word-mark + tagline bottom-left.
+      //   - Title / artist / next centered horizontally, vertically
+      //     positioned in the bottom half (y ≈ 490 / 542 / 572).
+      //
+      // drawtext horizontal centering uses the `text_w` runtime variable
+      // (always available in ffmpeg drawtext expressions) via
+      // x=(w-text_w)/2 — robust against any text length.
+      const metaYTitle  = 490; // bottom-half vertical anchor
+      const metaYArtist = metaYTitle + 52;
+      const metaYNext   = metaYArtist + 30;
+      const cx = '(w-text_w)/2';
+      filterComplex = [
+        // Background = warehouse image, lightly blurred and dimmed for
+        // legibility; the speaker stack on the left is preserved
+        // by the heavy 0.55 black overlay.
+        `[1:v]format=yuv420p,boxblur=8:1[bgblur]`,
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.55:t=fill[bg]`,
+        // Top-left "// ON AIR" chip (kept as the brand signature).
+        `[bg]${onAirChip}[v1]`,
+        // Centered metadata block in the bottom half. Each line is
+        // horizontally centered via x=(w-text_w)/2 so title/artist/next
+        // of any length stay aligned.
+        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=44:fontcolor=${INK}:x=${cx}:y=${metaYTitle}[v2]`,
+        `[v2]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_BODY}':fontsize=22:fontcolor=${INK_DIM}@0.85:x=${cx}:y=${metaYArtist}[v3]`,
+        `[v3]drawtext=textfile='${tf('next.txt')}':reload=1:fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK_DIM}@0.5:x=${cx}:y=${metaYNext}[v4]`,
+        // Bottom-left brand mark (SYCO23.ORG + tagline). The word-mark
+        // stays in red as the only red element in this template.
+        `[v4]${brandMark}[vout]`,
+        `[vout]split=2[vstream][vprev_in]`,
+        previewBranch
+      ].join(';');
+    }
+
+    // Background input — warehouse image for template 5, plain bg.png
+    // for all others. Template 5 has no cover (per user request), so
+    // we synthesise a 320×320 black image as the cover input to keep
+    // the [2:v] filter reference valid (ffmpeg complains if a referenced
+    // input has no output stream).
+    const bgFile = template === '5'
+      ? path.join(dataDir, 'warehouse-bg.jpg')
+      : path.join(dataDir, 'bg.png');
+    const coverInput = template === '5'
+      ? ['-f', 'lavfi', '-i', 'color=c=black:s=320x320:d=1']
+      : ['-loop', '1', '-i', path.join(dataDir, coverFile)];
 
     const inputArgs = [
       '-re', '-thread_queue_size', '1024',
       '-reconnect', '1', '-reconnect_at_eof', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
       '-i', listenUrl,
-      '-loop', '1', '-i', path.join(dataDir, 'bg.png'),
-      '-loop', '1', '-i', template === '4' ? path.join(dataDir, 'cover_round.png') : path.join(dataDir, 'cover.png'),
+      '-loop', '1', '-i', bgFile,
+      ...coverInput,
     ];
-
-    let filterComplex = '';
-
-    if (template === '1') {
-      const covSize = Math.floor(H * 0.25), marginX = Math.floor(W * 0.05), marginY = Math.floor(H * 0.08);
-      const textX = marginX + covSize + 30, textY = H - marginY - covSize + 20;
-      filterComplex = [
-        `[1:v]format=yuv420p[bg]`,
-        `[2:v]format=yuv420p,scale=${covSize}:${covSize}[cov]`,
-        `[bg][cov]overlay=x=${marginX}:y=${H - marginY - covSize}:format=yuv420[v1]`,
-        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=32:fontcolor=white:x=${textX}:y=${textY},drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT}':fontsize=24:fontcolor=0xAAAAAA:x=${textX}:y=${textY+45}[vout]`,
-        `[vout]split=2[vstream][vprev_in]`,
-        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
-      ].join(';');
-    } 
-    else if (template === '2') {
-      const covSize = Math.floor(H * 0.5), covX = (W - covSize) / 2, covY = (H - covSize) / 2 - 60;
-      filterComplex = [
-        `[1:v]format=yuv420p[bg]`,
-        `[2:v]format=yuv420p,scale=${covSize}:${covSize}[cov]`,
-        `[bg][cov]overlay=x=${covX}:y=${covY}:format=yuv420[v1]`,
-        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=42:fontcolor=white:x=(w-text_w)/2:y=${covY+covSize+40}[vout]`,
-        `[vout]split=2[vstream][vprev_in]`,
-        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
-      ].join(';');
-    }
-    else if (template === '4') {
-      const covY = Math.floor((H - COVER_SIZE) / 2);
-      filterComplex = [
-        `[1:v]format=yuv420p[bg]`,
-        `[2:v]format=yuv420p,rotate=a=t*PI/2:c=none[spinning]`,
-        `[bg][spinning]overlay=x=${COVER_X}:y=${covY}:format=yuv420[v1]`,
-        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${COVER_X+420}:y=${covY + 140}[vout]`,
-        `[vout]split=2[vstream][vprev_in]`,
-        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
-      ].join(';');
-    }
-    else {
-      const cY = (H - COVER_SIZE) / 2, TEXT_X = COVER_X + COVER_SIZE + 60;
-      filterComplex = [
-        `[0:a]showwaves=s=${W}x100:mode=cline:colors=${waveColor}:scale=sqrt:rate=30,format=yuv420p[waves]`,
-        `[1:v]format=yuv420p[bg]`,
-        `[2:v]format=yuv420p[cov]`,
-        `[bg][cov]overlay=x=${COVER_X}:y=${cY}:format=yuv420[v1]`,
-        `[v1][waves]overlay=x=0:y=${H - 100}:format=yuv420[v2]`,
-        `[v2]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT}':fontsize=20:fontcolor=0xAAAAAA:x=${TEXT_X}:y=${cY+100},drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_BOLD}':fontsize=36:fontcolor=white:x=${TEXT_X}:y=${cY+140}[vout]`,
-        `[vout]split=2[vstream][vprev_in]`,
-        `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`
-      ].join(';');
-    }
 
     return [
       ...inputArgs, '-filter_complex', filterComplex, '-map', '[vstream]', '-map', '0:a',

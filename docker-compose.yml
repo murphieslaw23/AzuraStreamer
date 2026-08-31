@@ -5,8 +5,11 @@ services:
       dockerfile: Dockerfile
     container_name: azurastreamer
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
+    # Removed host port exposure - will be accessed via reverse proxy
+    # ports:
+    #   - "0.0.0.0:3000:3000"
+    expose:
+      - "3000"  # Expose internally for reverse proxy
     environment:
       PORT: "3000"
       NODE_ENV: "production"
@@ -15,6 +18,8 @@ services:
       # Leave empty for this all-in-one deployment, where this process also serves
       # the UI. Only a split deployment (UI on a separate host) sets it.
       PUBLIC_APP_ORIGINS: ${PUBLIC_APP_ORIGINS:-}
+      AZURACAST_API_URL: ${AZURACAST_API_URL}
+      AZURACAST_API_KEY: ${AZURACAST_API_KEY}
     volumes:
       # Persist stream temp data outside the container
       - azurastreamer_tmp:/tmp/azurastreamer
@@ -34,7 +39,7 @@ services:
         reservations:
           memory: 512M
     healthcheck:
-      test: [ "CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', r => process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" ]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', function (r) { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', function () { process.exit(1); })\""]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -44,6 +49,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - syco23-proxy
+
+networks:
+  syco23-proxy:
+    external: true
 
 volumes:
   azurastreamer_tmp:

@@ -53,8 +53,28 @@ let streamCreationLock = new Map(); // For atomic duplicate checking
 let CFG = {
   PORT              : parseInt(process.env.PORT || '3000', 10),
   STREAMS_DIR       : path.join(__dirname, 'data', 'streams'),
-  FONT              : '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-  FONT_BOLD         : '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+  // The redesigned broadcast template stack (added when the templates were
+  // redesigned). ffmpeg picks these up via `fontfile=` paths in buildArgs().
+  FONT_DISPLAY      : '/usr/share/fonts/truetype/syco/BarlowCondensed-Bold.ttf',
+  FONT_DISPLAY_BLK  : '/usr/share/fonts/truetype/syco/BarlowCondensed-Black.ttf',
+  FONT_BODY         : '/usr/share/fonts/truetype/syco/Inter-Variable.ttf',
+  FONT_MONO         : '/usr/share/fonts/truetype/syco/JetBrainsMono-Variable.ttf',
+  // Kept for backward-compat with any caller that still references these.
+  FONT              : '/usr/share/fonts/truetype/syco/Inter-Variable.ttf',
+  FONT_BOLD         : '/usr/share/fonts/truetype/syco/BarlowCondensed-Bold.ttf',
+  // Brand strings inlined in the filter drawtext. Kept here (not in the
+  // DB) because they're operator-controlled and rarely change.
+  BRAND_NAME        : 'SYSTEM CORRUPT',
+  BRAND_HOME        : 'SYCO23.ORG',
+  BRAND_TAGLINE     : '24/7 UNDGROUND MIX SETS ONLY',
+  // Directory holding static brand images that get copied into each
+  // stream's dataDir at start time. Template 5 references
+  // `<dataDir>/warehouse-bg.jpg` from its filter graph, so it MUST be
+  // present in the stream dir before ffmpeg is spawned — otherwise the
+  // filter graph fails immediately with "No such file or directory" and
+  // the restart loop burns ~3 minutes retrying the same permanent
+  // error. See StreamManager#downloadCover (ensureTemplateAssets).
+  BRAND_BG_DIR      : path.join(__dirname, 'public'),
 };
 
 // ── Middlewares ───────────────────────────────────────────────────────────────
@@ -234,16 +254,96 @@ app.get('/api/nowplaying', async (req, res) => {
   catch (err) { res.status(502).json({ ok: false, error: err.message }); }
 });
 
+// ── YouTube OAuth ───────────────────────────────────────────────────────────
+// These are the three routes the YouTube connect flow needs:
+//   1. GET /api/youtube/auth      → 302 to Google's consent screen
+//   2. GET /api/youtube/callback  → exchanges ?code= for tokens, stores the
+//                                    refresh token, and bounces back to the UI
+//   3. GET /api/youtube/test      → calls testConnection() so the "Test"
+//                                    button can confirm a stored refresh token
+//                                    still works
+app.get('/api/youtube/auth', async (req, res) => {
+  try {
+    const url = await youtube.getAuthUrl(req);
+    res.redirect(url);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/youtube/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) {
+    return res.redirect('/?yt_error=' + encodeURIComponent(String(error)));
+  }
+  if (!code) {
+    return res.status(400).send('Missing ?code= from Google OAuth callback');
+  }
+  try {
+    const tokens = await youtube.exchangeCode(String(code), req);
+    // Only confirm success to the UI when we actually have something to
+    // store. If Google didn't return a refresh_token (e.g. user previously
+    // granted the scope and the consent screen was reused), the UI's
+    // "YouTube connected" toast used to fire anyway and the next
+    // createBroadcast silently failed. Surface the truth here so the user
+    // knows to re-authorize with consent forced.
+    if (tokens.refresh_token) {
+      await db.updateSetting('YT_REFRESH_TOKEN', tokens.refresh_token);
+      res.redirect('/?yt_connected=1');
+    } else if (tokens.access_token) {
+      // We got an access token but no refresh token. We CAN still call
+      // createBroadcast for this one operation, but we won't be able to make
+      // any future broadcasts because we have no way to refresh the access
+      // token. Save the access token + expiry so the user gets a useful
+      // error pointing at the real fix (force re-consent in Google Cloud
+      // Console or remove the app from https://myaccount.google.com/permissions).
+      await db.updateSetting('YT_REFRESH_TOKEN', '');  // explicitly clear
+      res.redirect('/?yt_error=' + encodeURIComponent(
+        'YouTube did not return a refresh token. Remove this app from your Google account permissions (https://myaccount.google.com/permissions) and click Connect Account again, OR change the OAuth consent screen to "Insecure" / add the user as a test user.'
+      ));
+    } else {
+      res.redirect('/?yt_error=' + encodeURIComponent(
+        'Google returned no tokens. The authorization code may be invalid or already used. Try clicking Connect Account again.'
+      ));
+    }
+  } catch (err) {
+    res.redirect('/?yt_error=' + encodeURIComponent(err.message));
+  }
+});
+
+app.get('/api/youtube/test', async (req, res) => {
+  try {
+    const result = await youtube.testConnection();
+    res.json({ ok: true, data: result });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/streams', (req, res) => res.json({ ok: true, data: streamer.getAllSummaries() }));
 
 app.post('/api/streams/start', streamCreationLimiter, async (req, res) => {
   let { stationId, stationName, stationShortcode, listenUrl, platform, title, description, privacyStatus, template, manualStreamKey } = req.body;
-  
+
   try {
     // 1. INPUT VALIDATION
     validateStreamStart({ stationId, stationName, listenUrl, platform, template, manualStreamKey, title, privacyStatus });
 
     const stationIdInt = parseInt(stationId, 10);
+
+    // Template resolution: the body may explicitly include `template` (e.g.
+    // a future "live swap" feature), but if it's missing or invalid, fall
+    // back to the saved DEFAULT_TEMPLATE from the settings DB. This keeps
+    // the stream-start form simple (no per-stream picker) while still
+    // letting advanced callers override per-stream.
+    if (!template || !['1','2','3','4','5'].includes(String(template))) {
+      // Re-read the DB rather than the cached `settings` to avoid the case
+      // where the in-process cache is stale (the form save updated the DB
+      // and called loadInitialData in the browser, but the server's cache
+      // is updated separately on POST /api/settings).
+      const fresh = await db.getSettings();
+      template = fresh.DEFAULT_TEMPLATE || '3';
+    }
     
     // 2. ATOMIC DUPLICATE CHECK (prevent race condition)
     const lockKey = `${stationIdInt}:${platform}`;
@@ -318,6 +418,20 @@ app.post('/api/streams/start', streamCreationLimiter, async (req, res) => {
         // 6. DOWNLOAD COVER
         await streamer.downloadCover(artUrl, info.dataDir);
         info.currentArtUrl = artUrl;
+
+        // 6.5 PREFLIGHT: refuse to spawn ffmpeg against a dead upstream.
+        // preflightCheck() may rewrite info.listenUrl to a reachable variant
+        // (e.g. https://... → http://... if the upstream has a self-signed
+        // cert that Node rejects but ffmpeg's gnutls accepts).
+        const probe = await streamer.preflightCheck(info);
+        if (!probe.ok) {
+          info.status = 'error';
+          info.errorMessage = `Upstream listenUrl unreachable: ${info.listenUrl}`;
+          streamer.emit('stream:updated', streamer.getSummary(info));
+          await streamer.deleteStreamDir(info.dataDir);
+          streamer.streams.delete(info.id);
+          return res.status(502).json({ ok: false, error: 'Upstream stream unreachable' });
+        }
 
         // 7. SPAWN FFMPEG (with failure rollback)
         await streamer.spawnFfmpeg(info);

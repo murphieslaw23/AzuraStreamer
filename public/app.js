@@ -179,7 +179,11 @@ async function loadInitialData() {
     if ($('#inp-stream-title')) $('#inp-stream-title').value = s.DEFAULT_STREAM_TITLE || '';
     if ($('#inp-stream-desc')) $('#inp-stream-desc').value = s.DEFAULT_STREAM_DESC || '';
     if ($('#sel-visibility')) $('#sel-visibility').value = s.DEFAULT_STREAM_VISIBILITY || 'public';
-    if ($('#sel-template')) $('#sel-template').value = s.DEFAULT_TEMPLATE || '3';
+    // Visual template is configured only via the settings modal
+    // (DEFAULT_TEMPLATE). The stream-start sidebar no longer has a
+    // per-stream picker — the saved default is what every new broadcast
+    // uses. If the user wants a different look, they change it in
+    // Settings and start a new broadcast.
 
   } catch (err) { toast('Critical load failure', 'error'); }
 }
@@ -202,8 +206,30 @@ $('#stream-form').addEventListener('submit', async (e) => {
   const station = Store.state.stations.find(s => s.id === stationId);
   if (!station) return toast('Station not found', 'error');
 
-  const mount = station.mounts ? (station.mounts.find(m => !(String(m.name || '').toLowerCase().includes('mobile'))) || station.mounts[0]) : null;
+  // Pick the best mount to relay. AzuraCast's API marks one mount per
+  // station as `is_default: true` — that is the station's "main" stream
+  // (the one the station's public listen_url points at, the one the
+  // operator expects to be relayed). The previous code used a positional
+  // `find` that returned the first array element whose name didn't include
+  // "mobile", which silently picked the wrong mount whenever the default
+  // wasn't at index 0.
+  //
+  // Preference order:
+  //   1. The mount AzuraCast marks `is_default: true`
+  //   2. The first non-"mobile"-named mount (older AzuraCast versions
+  //      sometimes omit is_default)
+  //   3. The first mount as a last resort
+  function pickMount(mounts) {
+    if (!mounts || mounts.length === 0) return null;
+    const def = mounts.find(m => m && m.is_default === true);
+    if (def) return def;
+    const nonMobile = mounts.find(m => !(String(m.name || '').toLowerCase().includes('mobile')));
+    if (nonMobile) return nonMobile;
+    return mounts[0];
+  }
+  const mount = pickMount(station.mounts);
   if (!mount) return toast('No mount found', 'error');
+  console.log(`[stream-start] station=${station.name} picked mount id=${mount.id} name=${JSON.stringify(mount.name)} is_default=${mount.is_default} bitrate=${mount.bitrate} format=${mount.format} url=${mount.url}`);
 
   const btnStart = $('#btn-start');
   try {
@@ -217,7 +243,9 @@ $('#stream-form').addEventListener('submit', async (e) => {
         title: $('#inp-stream-title').value?.trim() || '',
         description: $('#inp-stream-desc').value?.trim() || '',
         privacyStatus: $('#sel-visibility').value || 'public',
-        template: parseInt($('#sel-template').value, 10) || 3,
+        // template: omitted on purpose. The server uses the saved
+        // DEFAULT_TEMPLATE from the settings DB so the stream-start form
+        // doesn't have a duplicate picker that could get out of sync.
         manualStreamKey: $('#chk-manual-key').checked ? $('#inp-manual-key').value?.trim() : null
       })
     }).then(r => r.json());
@@ -232,6 +260,60 @@ const btnLogout = document.getElementById('btn-logout');
 if (btnLogout) btnLogout.onclick = () => { if (confirm('Refresh dashboard?')) window.location.reload(); };
 
 $('#btn-refresh').onclick = loadInitialData;
+
+/* ── Mobile overflow menu ──────────────────────────────────────────────────
+   On phones (≤600px) the low-priority header items (logout, privacy, terms)
+   are hidden via CSS and surfaced in a "···" popover. Build the popover
+   once, lazily, on first open. Click-outside closes it.
+*/
+(function initOverflowMenu() {
+  const btn = document.getElementById('btn-overflow');
+  if (!btn) return;
+
+  function buildMenu() {
+    const menu = document.createElement('div');
+    menu.className = 'overflow-menu';
+    menu.setAttribute('role', 'menu');
+    menu.style.display = 'none';
+    document.body.appendChild(menu);
+
+    const items = [
+      { label: 'Refresh dashboard', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>', action: () => loadInitialData() },
+      { label: 'Privacy Policy',     icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>', action: () => { window.location.href = '/privacy.html'; } },
+      { label: 'Terms of Use',       icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', action: () => { window.location.href = '/terms.html'; } },
+      { label: 'Reload page',        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 0115-6.7L21 8M21 3v5h-5M21 12a9 9 0 01-15 6.7L3 16M3 21v-5h5"/></svg>', action: () => window.location.reload() },
+    ];
+    for (const it of items) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'overflow-menu-item';
+      row.setAttribute('role', 'menuitem');
+      row.innerHTML = it.icon + '<span>' + it.label + '</span>';
+      row.onclick = () => { close(); it.action(); };
+      menu.appendChild(row);
+    }
+    return menu;
+  }
+
+  let menu = null;
+  function open() {
+    if (!menu) menu = buildMenu();
+    menu.style.display = 'block';
+    btn.setAttribute('aria-expanded', 'true');
+    setTimeout(() => document.addEventListener('click', outsideHandler, { once: true }), 0);
+  }
+  function close() {
+    if (menu) menu.style.display = 'none';
+    btn.setAttribute('aria-expanded', 'false');
+  }
+  function toggle() { (menu && menu.style.display === 'block') ? close() : open(); }
+  function outsideHandler(e) {
+    if (menu && !menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close();
+  }
+
+  btn.onclick = (e) => { e.stopPropagation(); toggle(); };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+})();
 
 $('#btn-settings').onclick = () => {
   const host = window.location.host;
@@ -259,6 +341,62 @@ window.addEventListener('keydown', (e) => {
     const modal = $('#settings-modal'); if (modal && modal.classList.contains('active')) modal.classList.remove('active');
   }
 });
+
+// YouTube "Connect Account" — kicks off the OAuth flow. The server returns a
+// 302 to Google's consent screen; we follow it by setting window.location.
+const btnConnectYt = document.getElementById('btn-connect-yt');
+if (btnConnectYt) {
+  btnConnectYt.onclick = () => {
+    btnConnectYt.disabled = true;
+    btnConnectYt.textContent = 'Redirecting…';
+    window.location.href = '/api/youtube/auth';
+  };
+}
+
+// "Test" buttons (YouTube + Twitch) — confirm the stored refresh token still
+// works by calling the per-platform /test endpoint.
+$$('.btn-test-conn').forEach(btn => {
+  btn.onclick = async () => {
+    const platform = btn.dataset.platform;
+    if (!platform) return;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Testing…';
+    try {
+      const res = await apiFetch(`/api/${platform}/test`).then(r => r.json());
+      if (res.ok) {
+        const who = res.data?.channel || res.data?.user || 'OK';
+        toast(`${platform} connection OK: ${who}`, 'success');
+      } else {
+        toast(`${platform} test failed: ${res.error}`, 'error');
+      }
+    } catch (err) {
+      toast(`${platform} test failed: ${err.message}`, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  };
+});
+
+// Surface the OAuth return flags the server adds to the redirect URL
+// (?yt_connected=1 or ?yt_error=...) so the user sees feedback after the
+// bounce-back.
+(function surfaceOAuthResult() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('yt_connected') === '1') {
+    toast('YouTube account connected', 'success');
+    // Strip the flag from the URL so a page refresh doesn't re-fire the toast.
+    params.delete('yt_connected');
+    const qs = params.toString();
+    history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+  } else if (params.get('yt_error')) {
+    toast('YouTube connect failed: ' + params.get('yt_error'), 'error');
+    params.delete('yt_error');
+    const qs = params.toString();
+    history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+  }
+})();
 
 $('#settings-form').onsubmit = async (e) => {
   e.preventDefault();
