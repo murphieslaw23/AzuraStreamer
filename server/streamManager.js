@@ -103,6 +103,22 @@ class StreamManager extends EventEmitter {
 
       if (!info.dataDir) continue;
 
+      // Migration: drop persisted streams whose dataDir no longer exists
+      // (e.g. previous version stored paths under /tmp, which is wiped on
+      // container restart, while the sqlite DB on the bind-mounted volume
+      // survives). Loading such a row just produces a permanent ffmpeg
+      // failure on every spawn — better to delete the DB row up front so
+      // the UI doesn't show a zombie stream.
+      const dirOk = await (async () => {
+        try { await require('fs').promises.access(info.dataDir); return true; }
+        catch { return false; }
+      })();
+      if (!dirOk) {
+        console.warn(`[StreamManager] dropping persisted stream ${info.id}: dataDir ${info.dataDir} is gone`);
+        await db.deletePersistedStream(info.id).catch(() => {});
+        continue;
+      }
+
       this.streams.set(info.id, info);
       this.emit('stream:added', this.getSummary(info));
 

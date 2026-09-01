@@ -9,6 +9,7 @@ const { Server } = require('socket.io');
 const path       = require('path');
 const session    = require('express-session');
 const fs         = require('fs');
+const fsp        = fs.promises;
 // bcrypt handled in auth module
 
 const db             = require('./db');
@@ -174,12 +175,36 @@ const streamLog = (entry) => io.emit('log:stream', { time: new Date().toLocaleTi
 const broadcast = (event, data) => io.emit(event, data);
 
 // ── Logic: Polling ────────────────────────────────────────────────────────────
+// Defensive helper: a stream whose dataDir has been wiped (e.g. previous
+// build stored paths under /tmp, or the volume was remounted) is impossible
+// to restart — every ffmpeg spawn will fail with "No such file or
+// directory" before the listener ever sees the new cover. Detect this early
+// in the poll and mark the stream as errored so the UI surfaces it instead
+// of silently burning retries.
+async function dataDirIsHealthy(dataDir) {
+  if (!dataDir) return false;
+  try {
+    await fsp.access(dataDir);
+  } catch {
+    return false;
+  }
+  // Also verify the static template asset that buildArgs() references by
+  // absolute path. A present-but-empty dataDir (race during startup) still
+  // produces a permanent ffmpeg failure.
+  try {
+    await fsp.access(path.join(dataDir, 'warehouse-bg.jpg'));
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 async function poll() {
   updateStreamMetrics(streamer.streams.values());
   try {
     const data = await azura.getNowPlaying();
     const transformed = data.map(AzuraClient.transformNowPlaying);
-    
+
     transformed.forEach(meta => broadcast('nowplaying:update', meta));
 
     // Update running streams
@@ -189,27 +214,130 @@ async function poll() {
       const np = transformed.find(d => d.stationId === s.stationId);
       if (!np) continue;
 
+      // Preflight dataDir before any IO. A missing directory means restart
+      // would just produce a permanent failure — bail to error instead of
+      // burning the art-change path.
+      if (!(await dataDirIsHealthy(s.dataDir))) {
+        s.status = 'error';
+        s.errorMessage = `dataDir missing or template asset missing: ${s.dataDir}`;
+        streamer.persistStreamState(s).catch(() => {});
+        broadcast('stream:update', streamer.getSummary(s));
+        console.error(`[${s.id}] ${s.errorMessage}`);
+        continue;
+      }
+
       s.listeners = np.listeners;
       s.currentSong = np.nowPlaying;
 
       const nextText = np.playingNext ? `${np.playingNext.artist} - ${np.playingNext.title}` : '';
-      
-      await streamer.writeMeta(s.dataDir, {
-        artist: np.nowPlaying.artist,
-        title:  np.nowPlaying.title,
-        next:   nextText,
-      });
+
+      try {
+        await streamer.writeMeta(s.dataDir, {
+          artist: np.nowPlaying.artist,
+          title:  np.nowPlaying.title,
+          next:   nextText,
+        });
+      } catch (err) {
+        // writeMeta hit an unrecoverable IO error (e.g. dataDir was wiped
+        // between the preflight above and now). Mark errored so we don't
+        // keep retrying a doomed stream on every poll.
+        s.status = 'error';
+        s.errorMessage = `writeMeta failed: ${err.message}`;
+        streamer.persistStreamState(s).catch(() => {});
+        broadcast('stream:update', streamer.getSummary(s));
+        console.error(`[${s.id}] ${s.errorMessage}`);
+        continue;
+      }
 
       if (np.nowPlaying.art && np.nowPlaying.art !== s.currentArtUrl) {
         logger.info(`[${s.id}] Art changed, restarting...`);
-        await streamer.downloadCover(np.nowPlaying.art, s.dataDir);
-        s.currentArtUrl = np.nowPlaying.art;
-        await streamer.restartFfmpeg(s);
+        try {
+          await streamer.downloadCover(np.nowPlaying.art, s.dataDir);
+          s.currentArtUrl = np.nowPlaying.art;
+          await streamer.restartFfmpeg(s);
+        } catch (err) {
+          // The download / restart path itself blew up (rare — usually a
+          // network error downloading the cover). Don't lose the stream
+          // over it; just skip this art update and try again next poll.
+          s.errorMessage = `art-change skipped: ${err.message}`;
+          console.error(`[${s.id}] ${s.errorMessage}`);
+        }
       }
       broadcast('stream:update', streamer.getSummary(s));
     }
   } catch (err) {
     logger.error('[poll] Error:', err.message);
+  }
+}
+
+// ── Watchdog ──────────────────────────────────────────────────────────────────────────
+// Every WATCHDOG_MS we audit every stream and recover ones that are stuck
+// in a transient state too long. Without this, a single AzuraCast outage
+// during container startup leaves a stream in "reconnecting" until the
+// operator manually restarts it.
+//
+// Recovery rules:
+//   * status === 'starting' for > STARTING_TIMEOUT_MS  → kill the start
+//     timeout and force spawnFfmpeg again (the original start may have
+//     stalled on a slow upstream that has since come back).
+//   * status === 'reconnecting' for > RECONNECTING_TIMEOUT_MS and
+//     retryCount >= 3 → reset retryCount and try one more time. The
+//     exponential backoff otherwise gives up at 10 retries (~3 minutes),
+//     which is too short for AzuraCast restart windows (typically 30-90s
+//     during a deploy).
+//   * status === 'error' with a known-permanent message AND no ffmpeg
+//     process AND dataDir is healthy → clear the error and try once.
+//     Catches the case where a permanent failure was logged but the
+//     underlying problem (e.g. missing asset) was fixed by an external
+//     deploy.
+const WATCHDOG_MS              = parseInt(process.env.WATCHDOG_MS              || '30000', 10);
+const STARTING_TIMEOUT_MS      = parseInt(process.env.STARTING_TIMEOUT_MS      || '60000', 10);
+const RECONNECTING_TIMEOUT_MS  = parseInt(process.env.RECONNECTING_TIMEOUT_MS  || '120000', 10);
+
+async function watchdogTick() {
+  const now = Date.now();
+  for (const s of streamer.streams.values()) {
+    try {
+      const ageMs = now - (s.updatedAt ? Date.parse(s.updatedAt) : s.lastStartedAt || now);
+
+      if (s.status === 'starting' && ageMs > STARTING_TIMEOUT_MS) {
+        console.warn(`[watchdog] stream ${s.id} stuck in 'starting' for ${ageMs}ms — forcing restart`);
+        if (s._ffmpegStartTimeout) { clearTimeout(s._ffmpegStartTimeout); s._ffmpegStartTimeout = null; }
+        if (s.process) { try { s.process.kill('SIGKILL'); } catch (_) {} }
+        s.process = null;
+        s.status = 'reconnecting';
+        s.retryCount = (s.retryCount || 0) + 1;
+        s.errorMessage = `Watchdog: stuck in 'starting', forcing retry ${s.retryCount}`;
+        streamer.persistStreamState(s).catch(() => {});
+        broadcast('stream:update', streamer.getSummary(s));
+        if (await dataDirIsHealthy(s.dataDir)) {
+          await streamer.spawnFfmpeg(s);
+        }
+      } else if (s.status === 'reconnecting' && ageMs > RECONNECTING_TIMEOUT_MS && (s.retryCount || 0) >= 3) {
+        console.warn(`[watchdog] stream ${s.id} reconnecting ${ageMs}ms (retry ${s.retryCount}) — one more shot`);
+        s.retryCount = 0;   // reset budget — AzuraCast may have finally recovered
+        s.errorMessage = `Watchdog: giving it one more shot`;
+        if (s._reconnectTimer) { clearTimeout(s._reconnectTimer); s._reconnectTimer = null; }
+        streamer.persistStreamState(s).catch(() => {});
+        if (await dataDirIsHealthy(s.dataDir)) {
+          await streamer.spawnFfmpeg(s);
+        }
+      } else if (s.status === 'error' && !s.process) {
+        // Only attempt auto-recovery if the dataDir is healthy — otherwise
+        // we'd just re-trigger the same permanent failure.
+        if (await dataDirIsHealthy(s.dataDir)) {
+          console.warn(`[watchdog] stream ${s.id} in 'error' state with healthy dataDir — attempting recovery`);
+          s.status = 'reconnecting';
+          s.errorMessage = 'Watchdog: auto-recovery attempt';
+          s.retryCount = 0;
+          streamer.persistStreamState(s).catch(() => {});
+          broadcast('stream:update', streamer.getSummary(s));
+          await streamer.spawnFfmpeg(s);
+        }
+      }
+    } catch (err) {
+      console.error(`[watchdog] error inspecting ${s.id}:`, err.message);
+    }
   }
 }
 
@@ -530,6 +658,31 @@ async function init() {
   // Polling
   setInterval(poll, parseInt(settings.POLL_MS || '15000'));
   poll();
+
+  server.listen(CFG.PORT, () => logger.info(`AzuraStreamer running on port ${CFG.PORT}`));
+
+  // Watchdog: catch streams stuck in 'starting'/'reconnecting'/'error'
+  // longer than their respective timeouts and force a recovery. Runs
+  // independently of the poll loop so a wedged art-change restart can't
+  // starve the watchdog.
+  setInterval(watchdogTick, WATCHDOG_MS);
+  // Run once shortly after startup to catch streams that were 'live' when
+  // the previous process died and are now in a transitional state.
+  setTimeout(watchdogTick, 5000);
+
+  // Process-level self-watchdog: if this Node process is unresponsive for
+  // SELF_WATCHDOG_MS, force-exit so the container's restart policy brings
+  // up a fresh process. Without this, a wedged event loop (e.g. socket.io
+  // deadlock) silently kills every active stream because nothing polls.
+  const SELF_WATCHDOG_MS = parseInt(process.env.SELF_WATCHDOG_MS || '180000', 10);
+  let lastTick = Date.now();
+  setInterval(() => { lastTick = Date.now(); }, 30000);
+  setInterval(() => {
+    if (Date.now() - lastTick > SELF_WATCHDOG_MS + 35000) {
+      console.error('[self-watchdog] event loop frozen for > ' + SELF_WATCHDOG_MS + 'ms — exiting');
+      process.exit(1);
+    }
+  }, 60000).unref();
 
   server.listen(CFG.PORT, () => logger.info(`AzuraStreamer running on port ${CFG.PORT}`));
 }
