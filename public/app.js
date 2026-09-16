@@ -1,6 +1,6 @@
 'use strict';
 
-/* ── AzuraStreamer — Premium Control Logic ──────────────────────────────────── */
+/* ── SYCO23 Multicast Control ───────────────────────────────────────────────── */
 
 /**
  * State Manager: Simple reactive-like store
@@ -38,6 +38,9 @@ function clearAllTimers() {
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 
+const signalArtwork = $('.signal-artwork img');
+if (signalArtwork) signalArtwork.addEventListener('error', () => { signalArtwork.hidden = true; });
+
 async function apiFetch(url, options = {}) {
   const resp = await fetch(url, options);
   // No auth redirects — caller handles errors
@@ -72,10 +75,11 @@ function toast(msg, type = 'info') {
     <div class="toast-icon" style="color: var(--${type})">${icons[type]}</div>
     <div class="toast-content">
       <div class="toast-title">${titles[type]}</div>
-      <div class="toast-message">${msg}</div>
+      <div class="toast-message"></div>
     </div>
     <button class="toast-close" aria-label="Close notification">✕</button>
   `;
+  el.querySelector('.toast-message').textContent = String(msg);
   
   const toasts = $('#toasts'); if (toasts) toasts.prepend(el);
   const closeBtn = el.querySelector('.toast-close');
@@ -104,7 +108,18 @@ function updateDashboard() {
   const selStation = $('#sel-station'); if (selStation) selStation.value = station.id;
 
   // Media
-  const artImg = $('#art-img-display'); if (artImg && song.art && artImg.src !== song.art) artImg.src = song.art;
+  const artImg = $('#art-img-display');
+  if (artImg) {
+    if (song.art) {
+      if (artImg.src !== song.art) artImg.src = song.art;
+      artImg.alt = `${song.title || 'Current track'} artwork`;
+      artImg.hidden = false;
+    } else {
+      artImg.hidden = true;
+      artImg.removeAttribute('src');
+      artImg.alt = '';
+    }
+  }
   const npTitle = $('#np-title-display'); if (npTitle) npTitle.textContent = song.title || '—';
   const npArtist = $('#np-artist-display'); if (npArtist) npArtist.textContent = song.artist || '—';
   const npFill = $('#np-fill-display'); if (npFill && song.duration > 0) npFill.style.width = `${Math.min(100, (song.elapsed / song.duration) * 100)}%`;
@@ -137,7 +152,8 @@ function updateDashboard() {
 
     if (btnStop) btnStop.onclick = () => stopStream(stream.id);
   } else {
-    [banner, stats, preview, $('#link-stream')].forEach(el => el && (el.hidden = true));
+    [stats, preview, $('#link-stream')].forEach(el => el && (el.hidden = true));
+    if (banner) { banner.hidden = false; banner.textContent = 'Signal offline'; banner.className = 'stream-status-label'; }
     if (btnStart) btnStart.hidden = false;
     if (btnStop) btnStop.hidden = true;
     if (uptimeTimers[station.id]) { clearInterval(uptimeTimers[station.id]); delete uptimeTimers[station.id]; }
@@ -317,30 +333,72 @@ $('#btn-refresh').onclick = loadInitialData;
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 })();
 
-$('#btn-settings').onclick = () => {
+let settingsOpener = null;
+
+function getModalFocusables(modal) {
+  return $$('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])', modal)
+    .filter(el => !el.hidden && el.offsetParent !== null);
+}
+
+function closeSettings() {
+  const modal = $('#settings-modal');
+  if (!modal || !modal.classList.contains('active')) return;
+  modal.classList.remove('active');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  settingsOpener?.focus();
+}
+
+function enhanceSettingsLabels() {
+  $$('#settings-form .form-group').forEach((group) => {
+    const label = group.querySelector('label.form-label');
+    const control = group.querySelector('input[name], select[name], textarea[name]');
+    if (!label || !control) return;
+    if (!control.id) control.id = `setting-${control.name.toLowerCase().replace(/_/g, '-')}`;
+    label.htmlFor = control.id;
+  });
+}
+
+$('#btn-settings').onclick = (event) => {
+  settingsOpener = event.currentTarget;
   const host = window.location.host;
   $$('.display-redirect-uri').forEach(el => el.textContent = `${window.location.protocol}//${host}/api/${el.dataset.platform}/callback`);
   const form = $('#settings-form');
   for (const [k, v] of Object.entries(Store.state.settings)) if (form?.elements[k]) form.elements[k].value = v;
   const modal = $('#settings-modal');
   if (modal) {
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-hidden', 'false');
     modal.classList.add('active');
-    // focus first input
+    document.body.style.overflow = 'hidden';
     setTimeout(() => {
-      const first = modal.querySelector('input, select, textarea, button');
+      const first = getModalFocusables(modal)[0];
       if (first) first.focus();
     }, 50);
   }
 };
 
-$$('.btn-close-modal').forEach(btn => btn.onclick = () => $('#settings-modal').classList.remove('active'));
+enhanceSettingsLabels();
+$$('.btn-close-modal').forEach(btn => btn.onclick = closeSettings);
+
+const metadataDisclosure = $('.metadata-section');
+const desktopMetadata = window.matchMedia('(min-width: 768px)');
+if (metadataDisclosure && !desktopMetadata.matches) metadataDisclosure.open = false;
+desktopMetadata.addEventListener?.('change', (event) => {
+  if (event.matches && metadataDisclosure) metadataDisclosure.open = true;
+});
 
 // Close modal on Escape
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    const modal = $('#settings-modal'); if (modal && modal.classList.contains('active')) modal.classList.remove('active');
+window.addEventListener('keydown', (event) => {
+  const modal = $('#settings-modal');
+  if (!modal?.classList.contains('active')) return;
+  if (event.key === 'Escape') closeSettings();
+  if (event.key === 'Tab') {
+    const focusables = getModalFocusables(modal);
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 });
 
@@ -408,7 +466,7 @@ $('#settings-form').onsubmit = async (e) => {
     if (res.ok) {
       Store.update({ settings: { ...Store.state.settings, ...data } });
       toast('Settings saved', 'success');
-      $('#settings-modal').classList.remove('active');
+      closeSettings();
       loadInitialData();
     }
   } catch (err) { toast('Save failed', 'error'); }
@@ -483,4 +541,28 @@ function addLogLine(entry) {
   window.addEventListener('beforeunload', clearAllTimers);
 })();
 
-const chkManual = $('#chk-manual-key'); if (chkManual) chkManual.onchange = (e) => { const wrap = $('#manual-key-wrap'); if (wrap) wrap.style.display = e.target.checked ? 'block' : 'none'; };
+const chkManual = $('#chk-manual-key');
+if (chkManual) chkManual.onchange = (event) => {
+  const wrap = $('#manual-key-wrap');
+  if (wrap) wrap.hidden = !event.target.checked;
+};
+
+$$('input[name="platform"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    const visibility = $('#yt-visibility-group');
+    if (visibility) visibility.hidden = radio.checked && radio.value === 'twitch';
+  });
+});
+
+$$('.btn-copy-uri').forEach((button) => {
+  button.addEventListener('click', async () => {
+    const value = button.closest('.form-group')?.querySelector('.display-redirect-uri')?.textContent?.trim();
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      toast('Redirect URI copied', 'success');
+    } catch {
+      toast('Copy the redirect URI manually', 'warning');
+    }
+  });
+});

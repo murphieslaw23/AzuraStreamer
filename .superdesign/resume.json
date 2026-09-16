@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "/": {
+      "targetKind": "existing-ui",
+      "projectId": "d0fa2acf-fa02-48e8-88fe-cfd4a1c6d4db",
+      "baselineDraftId": "60af0a36-0c1f-4908-8bff-45ed0420b770",
+      "activeDraftId": "60af0a36-0c1f-4908-8bff-45ed0420b770",
+      "designSystemPath": ".superdesign/design-system.md",
+      "referenceIds": [
+        "77023c75-796f-4d4a-9ff1-99210062512c",
+        "8774d48c-986a-4d37-82b6-015783d28e56",
+        "ad63b95e-ffb7-4704-a988-376fdf8955ae",
+        "3a11d6e3-4ccc-46b0-9a12-c68c14d2b508"
+      ],
+      "contextFiles": [
+        ".superdesign/design-system.md",
+        "public/index.html",
+        "public/style.css",
+        "public/app.js"
+      ],
+      "fingerprints": {
+        ".superdesign/design-system.md": "ef21df0850751b898cb88e552ab2595cfb147976178bca6d3fdb12cb28a3d65a",
+        "public/index.html": "90c59089abe0aafa757c56526a60e32fa819a480b89a525fb829b0e1ed9c8104",
+        "public/style.css": "1df97b79934b798ba7bd7984dd07c31b866f56fb6da8af34cb2ee1e884fa2668",
+        "public/app.js": "6921603932787635bf7590c57434af9fb297bf9aeefa417740fa418ad16fbeec"
+      },
+      "components": [],
+      "drafts": {
+        "60af0a36-0c1f-4908-8bff-45ed0420b770": {
+          "title": "SYCO23 Multicast Control",
+          "visualDirection": "mechanical totem operator console",
+          "currentVersion": 3
+        }
+      },
+      "updatedAt": "2026-09-16T16:55:42Z"
+    }
+  }
+}

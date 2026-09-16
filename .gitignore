@@ -48,4 +48,5 @@ Thumbs.db
 
 # Temporary files
 /tmp/azurastreamer/
+.superdesign/tmp/
 *.tmp
