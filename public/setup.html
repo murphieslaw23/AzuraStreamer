@@ -43,12 +43,50 @@
     <h1>Welcome</h1>
     <p>Please set your administrator password to initialize the application.</p>
     
-    <p style="color: var(--text-muted); margin: 20px 0;">Setup and authentication have been removed for this instance. Visit the dashboard to configure integrations directly.</p>
-    <a href="/" class="btn btn--primary btn--full">Go to Dashboard</a>
+    <form id="setup-form">
+      <div class="form-group">
+        <label class="form-label">Admin Password</label>
+        <input id="inp-password" type="password" class="form-input" placeholder="Min 8 characters" required minlength="8" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirm Password</label>
+        <input id="inp-confirm" type="password" class="form-input" placeholder="Repeat your password" required minlength="8" />
+      </div>
+      <div id="setup-error" class="badge badge--error" style="width: 100%; margin-bottom: 20px; justify-content: center;" hidden></div>
+      <button type="submit" class="btn btn--primary btn--full">Complete Setup</button>
+    </form>
   </div>
 
   <script>
-    // Setup page no longer required — informational only.
+    const $ = (selector) => document.querySelector(selector);
+    const error = $('#setup-error');
+
+    fetch('/api/auth-status').then(response => response.json()).then(data => {
+      if (!data.setupRequired) window.location.href = '/login.html';
+    });
+
+    $('#setup-form').onsubmit = async (event) => {
+      event.preventDefault();
+      const password = $('#inp-password').value;
+      if (password !== $('#inp-confirm').value) {
+        error.textContent = 'Passwords do not match';
+        error.hidden = false;
+        return;
+      }
+      try {
+        const data = await fetch('/api/setup/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        }).then(response => response.json());
+        if (data.ok) return window.location.assign('/');
+        error.textContent = data.error || 'Setup failed';
+        error.hidden = false;
+      } catch {
+        error.textContent = 'Connection error';
+        error.hidden = false;
+      }
+    };
   </script>
 </body>
 </html>

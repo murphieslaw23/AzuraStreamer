@@ -8,7 +8,7 @@ test('VALID_PLATFORMS contains expected platforms', () => {
 });
 
 test('VALID_TEMPLATES contains expected templates', () => {
-  assert.deepEqual(VALID_TEMPLATES, ['1', '2', '3', '4']);
+  assert.deepEqual(VALID_TEMPLATES, ['1', '2', '3', '4', '5']);
 });
 
 test('validateStreamStart accepts valid params', () => {

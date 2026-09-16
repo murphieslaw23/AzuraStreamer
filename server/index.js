@@ -10,7 +10,7 @@ const path       = require('path');
 const session    = require('express-session');
 const fs         = require('fs');
 const fsp        = fs.promises;
-// bcrypt handled in auth module
+const bcrypt     = require('bcryptjs');
 
 const db             = require('./db');
 const streamStats     = require('./streamStats');
@@ -19,6 +19,8 @@ const twitch         = require('./twitch');
 const AzuraClient    = require('./azuraClient');
 const StreamManager  = require('./streamManager');
 const { validateStreamStart } = require('./validator');
+const { createRequireAuth } = require('./auth');
+const { streamCreationKey } = require('./rateLimit');
 
 // ── Deployment Topology ───────────────────────────────────────────────────────
 // The UI is served from this process in the all-in-one Docker deployment, and
@@ -95,7 +97,7 @@ const streamCreationLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 10, // limit each IP to 10 stream creations per hour
   message: { ok: false, error: 'Too many stream creations, please try again after 1 hour' },
-  keyGenerator: (req) => req.ip + (req.body.stationId || ''),
+  keyGenerator: streamCreationKey,
   skip: (req) => process.env.DISABLE_RATE_LIMIT === 'true',
 });
 app.use(express.json());
@@ -130,15 +132,31 @@ app.use('/api', apiLimiter, (req, res, next) => {
   next();
 });
 
-// auth.requireAuth used later in middleware
+const requireAuth = createRequireAuth(() => db.getSettings());
+const publicPaths = new Set([
+  '/login.html',
+  '/setup.html',
+  '/style.css',
+  '/privacy.html',
+  '/privacy',
+  '/terms.html',
+  '/terms',
+  '/api/auth-status',
+  '/api/login',
+  '/api/setup/admin',
+  '/api/health',
+]);
+
+app.use((req, res, next) => {
+  if (publicPaths.has(req.path) || req.path.startsWith('/socket.io/')) return next();
+  return requireAuth(req, res, next).catch(next);
+});
 
 // Public Assets
 app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
 app.get('/setup.html', (req, res) => res.sendFile(path.join(__dirname, 'public', 'setup.html')));
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
-
-// No authorization: serve *** files and APIs without auth checks
 
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
 
@@ -168,7 +186,10 @@ app.get('/mock/azura/nowplaying', (req, res) => {
 });
 
 // ── Socket.io Logic ──────────────────────────────────────────────────────────
-io.use((socket, next) => next());
+io.use((socket, next) => {
+  if (socket.request.session?.authenticated) return next();
+  return next(new Error('Unauthorized'));
+});
 
 const sysLog = (entry) => io.emit('log:system', { time: new Date().toLocaleTimeString('en-GB'), ...entry });
 const streamLog = (entry) => io.emit('log:stream', { time: new Date().toLocaleTimeString('en-GB'), ...entry });
@@ -343,7 +364,47 @@ async function watchdogTick() {
 
 // ── REST API ──────────────────────────────────────────────────────────────────
 
-// Authentication removed: login/setup endpoints disabled
+app.post('/api/login', async (req, res) => {
+  const { password } = req.body;
+  const settings = await db.getSettings();
+  const hash = settings.ADMIN_PASSWORD;
+
+  if (!hash) return res.status(400).json({ ok: false, error: 'Setup required' });
+
+  if (await bcrypt.compare(String(password || ''), hash)) {
+    req.session.authenticated = true;
+    return res.json({ ok: true });
+  }
+  return res.status(401).json({ ok: false, error: 'Invalid password' });
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.get('/api/auth-status', async (req, res) => {
+  const settings = await db.getSettings();
+  res.json({
+    authenticated: Boolean(req.session?.authenticated),
+    setupRequired: !settings.ADMIN_PASSWORD,
+  });
+});
+
+app.post('/api/setup/admin', async (req, res) => {
+  const settings = await db.getSettings();
+  if (settings.ADMIN_PASSWORD) {
+    return res.status(403).json({ ok: false, error: 'Setup already completed' });
+  }
+
+  const password = String(req.body?.password || '');
+  if (password.length < 8) {
+    return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters' });
+  }
+
+  await db.updateSetting('ADMIN_PASSWORD', await bcrypt.hash(password, 10));
+  req.session.authenticated = true;
+  return res.json({ ok: true });
+});
 
 // Liveness for orchestrators and the deployment rollout gate. Deliberately does
 // not touch AzuraCast: an unreachable or unconfigured upstream is an operational
@@ -360,21 +421,16 @@ app.get('/api/health', (req, res) => res.json({
 }));
 
 app.get('/api/stations', async (req, res) => {
-  try { res.json({ ok: true, data: await azura.getStations() })
+  try { res.json({ ok: true, data: await azura.getStations() }); }
+  catch (err) { res.status(502).json({ ok: false, error: err.message }); }
+});
 
 app.get('/api/stats', async (req, res) => {
   try {
-    const summary = await streamStats.getStatsSummary();
-
-    res.json({ ok: true, data: summary });
-
+    res.json({ ok: true, data: await streamStats.getStatsSummary() });
   } catch (err) {
     res.status(500).json({ ok: false, error: 'Failed to get stats' });
-
   }
-});
-; }
-  catch (err) { res.status(502).json({ ok: false, error: err.message }); }
 });
 
 app.get('/api/nowplaying', async (req, res) => {
@@ -459,18 +515,14 @@ app.post('/api/streams/start', streamCreationLimiter, async (req, res) => {
 
     const stationIdInt = parseInt(stationId, 10);
 
-    // Template resolution: the body may explicitly include `template` (e.g.
-    // a future "live swap" feature), but if it's missing or invalid, fall
-    // back to the saved DEFAULT_TEMPLATE from the settings DB. This keeps
-    // the stream-start form simple (no per-stream picker) while still
-    // letting advanced callers override per-stream.
-    if (!template || !['1','2','3','4','5'].includes(String(template))) {
-      // Re-read the DB rather than the cached `settings` to avoid the case
-      // where the in-process cache is stale (the form save updated the DB
-      // and called loadInitialData in the browser, but the server's cache
-      // is updated separately on POST /api/settings).
-      const fresh = await db.getSettings();
-      template = fresh.DEFAULT_TEMPLATE || '3';
+    // Template resolution: templates 1–4 have been retired; the only
+    // supported visual template is "5" (Warehouse). Any incoming value
+    // — including the saved DEFAULT_TEMPLATE from the settings DB or a
+    // stale value from a form pre-dating this change — is forced to
+    // "5". This keeps the public surface uniform: every new broadcast
+    // uses the same design.
+    if (!template || String(template) !== '5') {
+      template = '5';
     }
     
     // 2. ATOMIC DUPLICATE CHECK (prevent race condition)
@@ -683,8 +735,6 @@ async function init() {
       process.exit(1);
     }
   }, 60000).unref();
-
-  server.listen(CFG.PORT, () => logger.info(`AzuraStreamer running on port ${CFG.PORT}`));
 }
 
 // ── Graceful Shutdown ─────────────────────────────────────────────────────────

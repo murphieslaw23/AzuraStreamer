@@ -83,8 +83,15 @@
       <h1 class="login-title">AzuraStreamer</h1>
       <p class="login-sub">Authorized Personnel Only</p>
       
-      <p style="color: var(--text-muted); margin: 20px 0;">Authentication has been disabled on this instance. You can access the dashboard directly.</p>
-      <a href="/" class="btn btn--primary btn--full">Go to Dashboard</a>
+      <div id="login-error" class="error-msg"></div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label class="form-label" style="text-align: left;">System Password</label>
+          <input type="password" id="inp-password" class="form-input" placeholder="••••••••" required autofocus>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full">Access Dashboard</button>
+      </form>
 
       <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; gap: 20px;">
         <a href="/privacy.html" style="color: var(--text-dim); text-decoration: none; font-size: 12px; font-weight: 500; transition: color 0.2s;">Privacy Policy</a>
@@ -93,8 +100,35 @@
     </div>
   </div>
 
-    <script>
-      // Informational page only — no auth logic.
-    </script>
+  <script>
+    const form = document.getElementById('login-form');
+    const error = document.getElementById('login-error');
+
+    fetch('/api/auth-status').then(response => response.json()).then(data => {
+      if (data.setupRequired) window.location.href = '/setup.html';
+    });
+
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      error.style.display = 'none';
+      const password = document.getElementById('inp-password');
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: password.value }),
+        });
+        const data = await response.json();
+        if (data.ok) return window.location.assign('/');
+        error.textContent = data.error || 'Login failed';
+        error.style.display = 'block';
+        password.value = '';
+        password.focus();
+      } catch {
+        error.textContent = 'Connection error. Is the server running?';
+        error.style.display = 'block';
+      }
+    };
+  </script>
 </body>
 </html>

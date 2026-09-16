@@ -255,9 +255,11 @@ $('#stream-form').addEventListener('submit', async (e) => {
   finally { if (btnStart) { btnStart.disabled = false; btnStart.classList.remove('btn--loading'); } }
 });
 
-// Logout disabled (no auth) — refresh state instead
 const btnLogout = document.getElementById('btn-logout');
-if (btnLogout) btnLogout.onclick = () => { if (confirm('Refresh dashboard?')) window.location.reload(); };
+if (btnLogout) btnLogout.onclick = async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.assign('/login.html');
+};
 
 $('#btn-refresh').onclick = loadInitialData;
 

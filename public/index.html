@@ -265,12 +265,15 @@
       <div class="form-group">
         <label class="form-label">Default Visual Template</label>
         <select name="DEFAULT_TEMPLATE" class="form-select">
-          <option value="1">1. Frequency</option>
-          <option value="2">2. Monolith</option>
-          <option value="3">3. Waveform (Default)</option>
-          <option value="4">4. Turntable</option>
-          <option value="5">5. Warehouse</option>
+          <option value="1" disabled>1. Frequency (deprecated)</option>
+          <option value="2" disabled>2. Monolith (deprecated)</option>
+          <option value="3" disabled>3. Waveform (deprecated)</option>
+          <option value="4" disabled>4. Turntable (deprecated)</option>
+          <option value="5" selected>5. Warehouse (default)</option>
         </select>
+        <p class="form-hint" style="font-size: 11px; color: var(--text-dim); margin-top: 6px;">
+          Templates 1–4 have been retired; only the Warehouse design is supported.
+        </p>
       </div>
 
       <!-- YouTube Setup -->

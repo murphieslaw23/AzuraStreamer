@@ -2,16 +2,43 @@
 
 const path = require('path');
 const fs = require('fs');
+const { spawnSync } = require('child_process');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'azurastreamer.db');
 
-// Try to use better-sqlite3 first (for production), fall back to sqlite3 (for tests/CI)
+// Try to use better-sqlite3 first (for production), fall back to sqlite3 (for tests/CI).
+// A bare `require('better-sqlite3')` succeeds even when the bundled native
+// binary is incompatible with the host's glibc — the crash only surfaces on
+// the first constructor call. We probe the constructor in a child process
+// first; if the child exits non-zero (segfault / linker error), we treat
+// better-sqlite3 as unusable and fall back to the pure-JS `sqlite3`.
 let Database;
 let isBetterSqlite = false;
 
+function probeBetterSqlite() {
+  try {
+    const r = spawnSync(process.execPath, ['-e', [
+      "const D = require('better-sqlite3');",
+      "const db = new D(':memory:');",
+      "db.exec('create table t(x int);');",
+      "db.prepare('insert into t values (?)').run(1);",
+      "db.prepare('select count(*) as c from t').get();",
+      "process.exit(0);",
+    ].join(' ')], { stdio: 'pipe', encoding: 'utf8' });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 try {
   Database = require('better-sqlite3');
-  isBetterSqlite = true;
+  isBetterSqlite = probeBetterSqlite();
+  if (!isBetterSqlite) {
+    // Native binary present but unusable on this host. Fall through to
+    // the legacy `sqlite3` binding so the service stays up.
+    Database = require('sqlite3').verbose();
+  }
 } catch (err) {
   // Fall back to sqlite3
   Database = require('sqlite3').verbose();

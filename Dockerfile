@@ -1,5 +1,5 @@
 # Stage 1: Build dependencies
-FROM node:20-slim as builder
+FROM node:20-slim AS builder
 
 LABEL maintainer="AzuraStreamer"
 LABEL description="AzuraCast → YouTube/Twitch Live Stream Controller"
@@ -36,7 +36,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && fc-cache -f
 
 # Skip puppeteer Chromium download, use system chromium
->>>>>>> 6aac436 (AzuraStreamer pipeline hardening + template 5 redesign)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 WORKDIR /app
@@ -54,26 +53,43 @@ COPY server/package*.json ./
 RUN npm install --omit=dev
 
 # Stage 2: Runtime image
-FROM node:20-alpine
+# Use the same debian-slim base as the builder so the native modules
+# copied from the builder (better-sqlite3 prebuilds, etc.) load
+# correctly. The previous alpine runtime segfaulted at startup because
+# the glibc-linked .node files couldn't resolve their libc dependency.
+FROM node:20-slim
 
 LABEL maintainer="AzuraStreamer"
 LABEL description="AzuraCast → YouTube/Twitch Live Stream Controller"
 
 # Install runtime dependencies
-RUN apk add --no-cache --update \
+RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
-  font-dejavu \
+  fonts-dejavu-core \
+  fonts-liberation \
   ca-certificates \
   chromium \
-  nss \
-  freetype \
-  harfbuzz \
-  ttf-freefont \
-  && update-ca-certificates
+  libgbm1 \
+  libnss3 \
+  libasound2 \
+  libatk-bridge2.0-0 \
+  libatk1.0-0 \
+  libgtk-3-0 \
+  libxkbcommon0 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxfixes3 \
+  libxrandr2 \
+  libpangocairo-1.0-0 \
+  libpango-1.0-0 \
+  libcairo2 \
+  libcups2 \
+  libdrm2 \
+  && rm -rf /var/lib/apt/lists/*
 
 # Skip puppeteer Chromium download, use system chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 

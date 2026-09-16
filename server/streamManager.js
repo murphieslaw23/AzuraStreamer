@@ -705,16 +705,23 @@ class StreamManager extends EventEmitter {
     } = this.config;
     const tf = (f) => path.join(dataDir, f);
 
-    // Shared color tokens (inlined into drawtext). One accent, one ink,
-    // one dim ink. Sharp contrast only — underground station, not Spotify.
-    // RED is a deep arterial blood-red (≈ Pantone 1797 / Bloor red) — the
-    // user wanted the old "signal red" replaced with a more visceral tone.
-    const INK     = '0xE6EAF2';
-    const INK_DIM = '0x9AA3B2';
-    const RED     = '0xC8102E';
-    const RED_S   = '0xC8102E@0.6';
-    const RED_F   = '0xC8102E@0.18';
-    const BG      = '0x06070B';
+    // ── SYCO23 brand color tokens ──────────────────────────────────────
+    // Single source of truth for the live stream palette. One accent,
+    // one ink, one dim ink. Sharp contrast only — underground station,
+    // not Spotify.
+    //
+    //   SYCO23_BLOOD — the brand red. Deep dried-blood, desaturated and
+    //   pushed away from pink to read as a visceral / arterial tone on a
+    //   dark photo background. Replaces the older #C8102E "signal red"
+    //   which read as slightly pinky on warehouse / dark templates.
+    //   Use this token anywhere red appears in the stream.
+    const SYCO23_BLOOD = '0xA3001B';
+    const INK           = '0xE6EAF2';
+    const INK_DIM       = '0x9AA3B2';
+    const RED           = SYCO23_BLOOD;
+    const RED_S         = SYCO23_BLOOD + '@0.6';
+    const RED_F         = SYCO23_BLOOD + '@0.18';
+    const BG            = '0x06070B';
 
     // Fragments reused across all templates
     const coverFile = template === '4' ? 'cover_round.png' : 'cover.png';
@@ -727,10 +734,14 @@ class StreamManager extends EventEmitter {
     const brandX = W - 135 - 22;
     const brandMark = `drawtext=text='${BRAND_HOME}':fontfile='${FONT_DISPLAY}':fontsize=18:fontcolor=${RED}@0.9:x=${brandX}:y=${H - 32},drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=11:fontcolor=${INK_DIM}@0.7:x=22:y=${H - 32}`;
     // Right-aligned variants (template 5 — soundsystem on the left
-    // forces all text to the right column).
+    // forces all text to the right column so the photo's subject
+    // stays uncluttered).
     const rightColX = W - 410;   // left edge of the right-aligned column
     const onAirChipRight = `drawtext=text='// ON AIR   ${BRAND_NAME}':fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK}@0.85:x=${rightColX}:y=26,drawtext=text='SYCO':fontfile='${FONT_DISPLAY_BLK}':fontsize=14:fontcolor=${RED}@0.9:x=${rightColX}:y=46`;
     const taglineRight = `drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=11:fontcolor=${INK_DIM}@0.7:x=${rightColX}:y=${H - 32}`;
+    // Full right-column brand mark (wordmark + tagline) used by
+    // template 5 to mirror the right-side "// ON AIR" chip.
+    const brandMarkRight = `drawtext=text='${BRAND_HOME}':fontfile='${FONT_DISPLAY}':fontsize=18:fontcolor=${RED}@0.9:x=${brandX}:y=${H - 32},${taglineRight}`;
     const previewBranch = `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`;
 
     let filterComplex = '';
@@ -832,43 +843,55 @@ class StreamManager extends EventEmitter {
     else if (template === '5') {
       // WAREHOUSE — the soundsystem itself is the subject. The user's
       // reference image is a dark concrete warehouse with a massive
-      // speaker stack on the left; we use it as the live background
-      // and center the metadata in the bottom half. Per the 2026-08-31
-      // design pass: no waveform, no red carrier / floor / accent lines,
-      // metadata block is centered horizontally and sits in the lower
-      // half of the frame.
+      // speaker stack on the left.
       //
-      // Layout (W=1280, H=720):
-      //   - Warehouse image as background, blurred and dimmed.
-      //   - "// ON AIR  SYSTEM CORRUPT" chip top-left.
-      //   - "SYCO23.ORG" word-mark + tagline bottom-left.
-      //   - Title / artist / next centered horizontally, vertically
-      //     positioned in the bottom half (y ≈ 490 / 542 / 572).
+      //   Design constraints (current revision):
+      //     - Single red mark on the screen: `SYCO23.ORG` top-right
+      //       (rendered by `brandMark`, which also paints the
+      //       `24/7 UNDGROUND MIX SETS ONLY` tagline bottom-left in a
+      //       single line). Do NOT draw the tagline a second time — a
+      //       previous revision duplicated it (once via `brandMark`,
+      //       once explicitly) and the HLS re-encode made it look
+      //       like the line was doubled.
+      //     - Single typeface across the entire template:
+      //       `BarlowCondensed-Bold` (the centred-title era's brand
+      //       font). All elements are set in this one cut, with
+      //       sizes scaled per role.
+      //     - Generous safe area: 40px from every edge.
+      //     - All left-column elements share the same x-anchor and
+      //       form a single vertical typographic column.
+      //     - The "next plane track" (upcoming track) is hidden —
+      //       no up-next block, no UP NEXT label.
+      //     - No standalone `// ON AIR` chip; the only on-air signal
+      //       is the top-right `SYCO23.ORG` wordmark, which is
+      //       already red and already carries the brand voice.
       //
-      // drawtext horizontal centering uses the `text_w` runtime variable
-      // (always available in ffmpeg drawtext expressions) via
-      // x=(w-text_w)/2 — robust against any text length.
-      const metaYTitle  = 490; // bottom-half vertical anchor
-      const metaYArtist = metaYTitle + 52;
-      const metaYNext   = metaYArtist + 30;
-      const cx = '(w-text_w)/2';
+      //   Layout (W=1280, H=720), 40px safe area:
+      //     - Title:                 y = 540   (Bold 44pt, INK)
+      //     - Artist:                y = 590   (Bold 22pt, INK_DIM)
+      //     - Brand mark (top-right + tagline bottom-left): `brandMark`
+      //       paints SYCO23.ORG at the top-right and the 24/7 tagline
+      //       at the bottom-left, in one chained drawtext.
+      const safe     = 40;
+      const titleY   = 540;
+      const artistY  = titleY + 50;
       filterComplex = [
-        // Background = warehouse image, lightly blurred and dimmed for
-        // legibility; the speaker stack on the left is preserved
-        // by the heavy 0.55 black overlay.
-        `[1:v]format=yuv420p,boxblur=8:1[bgblur]`,
-        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.55:t=fill[bg]`,
-        // Top-left "// ON AIR" chip (kept as the brand signature).
-        `[bg]${onAirChip}[v1]`,
-        // Centered metadata block in the bottom half. Each line is
-        // horizontally centered via x=(w-text_w)/2 so title/artist/next
-        // of any length stay aligned.
-        `[v1]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=44:fontcolor=${INK}:x=${cx}:y=${metaYTitle}[v2]`,
-        `[v2]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_BODY}':fontsize=22:fontcolor=${INK_DIM}@0.85:x=${cx}:y=${metaYArtist}[v3]`,
-        `[v3]drawtext=textfile='${tf('next.txt')}':reload=1:fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK_DIM}@0.5:x=${cx}:y=${metaYNext}[v4]`,
-        // Bottom-left brand mark (SYCO23.ORG + tagline). The word-mark
-        // stays in red as the only red element in this template.
-        `[v4]${brandMark}[vout]`,
+        // Background = warehouse image, light blur + dim. The photo
+        // is the composition; all type sits on top.
+        `[1:v]format=yuv420p,boxblur=2:1[bgblur]`,
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.45:t=fill[bg]`,
+        // Title — BarlowCondensed-Bold 44pt, INK white.
+        `[bg]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=44:fontcolor=${INK}:x=${safe}:y=${titleY}[title]`,
+        // Artist — same font, 22pt, INK_DIM, directly under the title.
+        `[title]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=22:fontcolor=${INK_DIM}@0.95:x=${safe}:y=${artistY}[artist]`,
+        // Brand mark — `brandMark` paints:
+        //   - "SYCO23.ORG" wordmark in red, top-right (the ONLY red on
+        //     the screen, the brand signature)
+        //   - "24/7 UNDGROUND MIX SETS ONLY" tagline, dim, bottom-left
+        // Both come from the shared `brandMark` fragment, so there is
+        // exactly one tagline on screen. This was the source of the
+        // "double hidden 24/7 line" the user saw on the live stream.
+        `[artist]${brandMark}[vout]`,
         `[vout]split=2[vstream][vprev_in]`,
         previewBranch
       ].join(';');
@@ -895,7 +918,10 @@ class StreamManager extends EventEmitter {
     ];
 
     return [
-      ...inputArgs, '-filter_complex', filterComplex, '-map', '[vstream]', '-map', '0:a',
+      // The preview output is intentionally reused by the UI. FFmpeg otherwise
+      // prompts when preview.jpg already exists; with stdin ignored by spawn,
+      // that prompt immediately ends the entire multi-output broadcast process.
+      '-y', '-nostdin', ...inputArgs, '-filter_complex', filterComplex, '-map', '[vstream]', '-map', '0:a',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '3000k', '-maxrate', '3500k', '-bufsize', '12000k',
       '-pix_fmt', 'yuv420p', '-g', '60', '-keyint_min', '60', '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
       '-f', 'flv', rtmpUrl, '-map', '[vprevout]', '-c:v', 'mjpeg', '-q:v', '5', '-pix_fmt', 'yuvj420p', '-f', 'image2', '-update', '1', path.join(dataDir, 'preview.jpg')
