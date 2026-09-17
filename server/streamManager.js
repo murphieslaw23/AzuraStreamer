@@ -11,6 +11,69 @@ const { validateDiskSpace } = require('./diskUtils');
 const db = require('./db');
 const streamStats = require('./streamStats');
 
+const sanitizeBroadcastText = (value) => String(value || '')
+  .replace(/[\0\n\r\\]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const glyphUnits = (char) => {
+  if (/\s/.test(char)) return 0.5;
+  if (/[ilI1.,'`|:;]/.test(char)) return 0.5;
+  if (/[MW@%&]/.test(char)) return 1.4;
+  if (/[\-\u2013\u2014]/.test(char)) return 0.75;
+  return 1;
+};
+
+const textUnits = (value) => Array.from(value).reduce((total, char) => total + glyphUnits(char), 0);
+
+function fitBroadcastLine(value, maxUnits) {
+  const chars = Array.from(value);
+  let used = 0;
+  let lastSpace = -1;
+  let index = 0;
+
+  for (; index < chars.length; index += 1) {
+    const next = used + glyphUnits(chars[index]);
+    if (next > maxUnits) break;
+    used = next;
+    if (/\s/.test(chars[index])) lastSpace = index;
+  }
+
+  if (index === chars.length) return [value.trim(), ''];
+  const cutAt = lastSpace > 0 ? lastSpace : Math.max(index, 1);
+  return [chars.slice(0, cutAt).join('').trim(), chars.slice(cutAt).join('').trim()];
+}
+
+function trimBroadcastLine(value, maxUnits) {
+  const chars = Array.from(value);
+  let used = 0;
+  let index = 0;
+  for (; index < chars.length; index += 1) {
+    const next = used + glyphUnits(chars[index]);
+    if (next > maxUnits) break;
+    used = next;
+  }
+  return chars.slice(0, index).join('').trimEnd();
+}
+
+function formatBroadcastTitle(value, maxUnits = 38, maxLines = 2) {
+  let remaining = sanitizeBroadcastText(value);
+  if (!remaining) return '';
+
+  const lines = [];
+  while (remaining && lines.length < maxLines) {
+    const [line, rest] = fitBroadcastLine(remaining, maxUnits);
+    lines.push(line);
+    remaining = rest;
+  }
+
+  if (remaining) {
+    const last = lines.length - 1;
+    lines[last] = `${trimBroadcastLine(lines[last], maxUnits - textUnits('…'))}…`;
+  }
+  return lines.join('\n');
+}
+
 class StreamManager extends EventEmitter {
   constructor(config = {}) {
     super();
@@ -342,6 +405,8 @@ class StreamManager extends EventEmitter {
     // Clear any previous timeout
     if (info._ffmpegStartTimeout) clearTimeout(info._ffmpegStartTimeout);
 
+    this.assertRenderFonts();
+
     const args = this.buildArgs(info);
     const safeArgs = args.map(a => a.includes('rtmp://') ? 'rtmp://[REDACTED]' : a);
     
@@ -490,6 +555,16 @@ class StreamManager extends EventEmitter {
     });
   }
 
+  assertRenderFonts() {
+    const fontKeys = ['FONT_DISPLAY', 'FONT_DISPLAY_BLK', 'FONT_BODY', 'FONT_MONO'];
+    for (const key of fontKeys) {
+      const fontPath = this.config[key];
+      if (!fontPath || !fs.existsSync(fontPath)) {
+        throw new Error(`Required broadcast font is unavailable (${key}): ${fontPath || 'not configured'}`);
+      }
+    }
+  }
+
   async restartFfmpeg(info) {
     if (!info.process) return;
     info._restarting = true;
@@ -575,15 +650,27 @@ class StreamManager extends EventEmitter {
   // was too restrictive and silently corrupted real titles — for example
   // "Live@Obk Dfk" became "Live Obk Dfk" because @ wasn't in the set.
   async writeMeta(dataDir, meta) {
-    const sanitize = (t) => String(t || '').replace(/[\n\r\\]/g, ' ').replace(/\s+/g, ' ').trim();
     const pairs = [
       ['artist.txt', meta.artist || ''],
       ['title.txt',  meta.title  || ''],
+      ['title_display.txt', formatBroadcastTitle(meta.title)],
       ['next.txt',   meta.next   || ''],
     ];
-    await Promise.all(pairs.map(([f, v]) =>
-      fsp.writeFile(path.join(dataDir, f), sanitize(v), 'utf8')
-    ));
+    await Promise.all(pairs.map(([fileName, value]) => {
+      const text = fileName === 'title_display.txt'
+        ? value.split('\n').map(sanitizeBroadcastText).join('\n')
+        : sanitizeBroadcastText(value);
+      return fsp.writeFile(path.join(dataDir, fileName), text, 'utf8');
+    }));
+  }
+
+  async isPreviewFresh(dataDir, maxAgeMs = 35000) {
+    try {
+      const stat = await fsp.stat(path.join(dataDir, 'preview.jpg'));
+      return stat.isFile() && stat.size > 0 && Date.now() - stat.mtimeMs <= maxAgeMs;
+    } catch (_) {
+      return false;
+    }
   }
 
   async downloadCover(artUrl, dataDir) {
@@ -715,33 +802,19 @@ class StreamManager extends EventEmitter {
     //   dark photo background. Replaces the older #C8102E "signal red"
     //   which read as slightly pinky on warehouse / dark templates.
     //   Use this token anywhere red appears in the stream.
-    const SYCO23_BLOOD = '0xA3001B';
-    const INK           = '0xE6EAF2';
-    const INK_DIM       = '0x9AA3B2';
+    const SYCO23_BLOOD = '0x9E1F19';
+    const INK           = '0xE8E0CF';
+    const INK_DIM       = '0xA29B8D';
     const RED           = SYCO23_BLOOD;
     const RED_S         = SYCO23_BLOOD + '@0.6';
     const RED_F         = SYCO23_BLOOD + '@0.18';
-    const BG            = '0x06070B';
+    const BG            = '0x080807';
 
     // Fragments reused across all templates
     const coverFile = template === '4' ? 'cover_round.png' : 'cover.png';
     // Left-aligned (templates 1-4): original chip and brand mark
     const onAirChip = `drawtext=text='// ON AIR   ${BRAND_NAME}':fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK}@0.85:x=22:y=26,drawtext=text='SYCO':fontfile='${FONT_DISPLAY_BLK}':fontsize=14:fontcolor=${RED}@0.9:x=22:y=46`;
-    // "SYCO23.ORG" is 9 chars in Barlow Condensed Bold 18pt; measured
-    // width is ~135px. Right-align by placing x = W - 135 - 22 (right
-    // margin). drawtext's `text_align=right` isn't supported in this
-    // ffmpeg build, so we hard-code the offset.
-    const brandX = W - 135 - 22;
-    const brandMark = `drawtext=text='${BRAND_HOME}':fontfile='${FONT_DISPLAY}':fontsize=18:fontcolor=${RED}@0.9:x=${brandX}:y=${H - 32},drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=11:fontcolor=${INK_DIM}@0.7:x=22:y=${H - 32}`;
-    // Right-aligned variants (template 5 — soundsystem on the left
-    // forces all text to the right column so the photo's subject
-    // stays uncluttered).
-    const rightColX = W - 410;   // left edge of the right-aligned column
-    const onAirChipRight = `drawtext=text='// ON AIR   ${BRAND_NAME}':fontfile='${FONT_MONO}':fontsize=12:fontcolor=${INK}@0.85:x=${rightColX}:y=26,drawtext=text='SYCO':fontfile='${FONT_DISPLAY_BLK}':fontsize=14:fontcolor=${RED}@0.9:x=${rightColX}:y=46`;
-    const taglineRight = `drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=11:fontcolor=${INK_DIM}@0.7:x=${rightColX}:y=${H - 32}`;
-    // Full right-column brand mark (wordmark + tagline) used by
-    // template 5 to mirror the right-side "// ON AIR" chip.
-    const brandMarkRight = `drawtext=text='${BRAND_HOME}':fontfile='${FONT_DISPLAY}':fontsize=18:fontcolor=${RED}@0.9:x=${brandX}:y=${H - 32},${taglineRight}`;
+    const brandMark = `drawtext=text='${BRAND_HOME}':fontfile='${FONT_DISPLAY}':fontsize=24:fontcolor=${RED}:x=w-text_w-40:y=40,drawtext=text='LIVE / SIGNAL ACTIVE':fontfile='${FONT_MONO}':fontsize=14:fontcolor=${INK}:x=w-text_w-40:y=76,drawtext=text='${BRAND_TAGLINE}':fontfile='${FONT_MONO}':fontsize=16:fontcolor=${INK_DIM}:x=40:y=h-text_h-40`;
     const previewBranch = `[vprev_in]fps=1/10,scale=480:-1:force_original_aspect_ratio=decrease,format=yuvj420p[vprevout]`;
 
     let filterComplex = '';
@@ -841,56 +914,17 @@ class StreamManager extends EventEmitter {
       ].join(';');
     }
     else if (template === '5') {
-      // WAREHOUSE — the soundsystem itself is the subject. The user's
-      // reference image is a dark concrete warehouse with a massive
-      // speaker stack on the left.
-      //
-      //   Design constraints (current revision):
-      //     - Single red mark on the screen: `SYCO23.ORG` top-right
-      //       (rendered by `brandMark`, which also paints the
-      //       `24/7 UNDGROUND MIX SETS ONLY` tagline bottom-left in a
-      //       single line). Do NOT draw the tagline a second time — a
-      //       previous revision duplicated it (once via `brandMark`,
-      //       once explicitly) and the HLS re-encode made it look
-      //       like the line was doubled.
-      //     - Single typeface across the entire template:
-      //       `BarlowCondensed-Bold` (the centred-title era's brand
-      //       font). All elements are set in this one cut, with
-      //       sizes scaled per role.
-      //     - Generous safe area: 40px from every edge.
-      //     - All left-column elements share the same x-anchor and
-      //       form a single vertical typographic column.
-      //     - The "next plane track" (upcoming track) is hidden —
-      //       no up-next block, no UP NEXT label.
-      //     - No standalone `// ON AIR` chip; the only on-air signal
-      //       is the top-right `SYCO23.ORG` wordmark, which is
-      //       already red and already carries the brand voice.
-      //
-      //   Layout (W=1280, H=720), 40px safe area:
-      //     - Title:                 y = 540   (Bold 44pt, INK)
-      //     - Artist:                y = 590   (Bold 22pt, INK_DIM)
-      //     - Brand mark (top-right + tagline bottom-left): `brandMark`
-      //       paints SYCO23.ORG at the top-right and the 24/7 tagline
-      //       at the bottom-left, in one chained drawtext.
-      const safe     = 40;
-      const titleY   = 540;
-      const artistY  = titleY + 50;
+      // WAREHOUSE — a restrained broadcast plate over the soundsystem
+      // photograph. Every element shares a 40px safe-area grid. The title
+      // is pre-fitted to two lines by writeMeta(), and the only saturated
+      // accent is the SYCO23 wordmark.
+      const safe = 40;
       filterComplex = [
-        // Background = warehouse image, light blur + dim. The photo
-        // is the composition; all type sits on top.
         `[1:v]format=yuv420p,boxblur=2:1[bgblur]`,
-        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.45:t=fill[bg]`,
-        // Title — BarlowCondensed-Bold 44pt, INK white.
-        `[bg]drawtext=textfile='${tf('title.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=44:fontcolor=${INK}:x=${safe}:y=${titleY}[title]`,
-        // Artist — same font, 22pt, INK_DIM, directly under the title.
-        `[title]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=22:fontcolor=${INK_DIM}@0.95:x=${safe}:y=${artistY}[artist]`,
-        // Brand mark — `brandMark` paints:
-        //   - "SYCO23.ORG" wordmark in red, top-right (the ONLY red on
-        //     the screen, the brand signature)
-        //   - "24/7 UNDGROUND MIX SETS ONLY" tagline, dim, bottom-left
-        // Both come from the shared `brandMark` fragment, so there is
-        // exactly one tagline on screen. This was the source of the
-        // "double hidden 24/7 line" the user saw on the live stream.
+        `[bgblur]drawbox=x=0:y=0:w=${W}:h=${H}:color=${BG}@0.42:t=fill[bg]`,
+        `[bg]drawbox=x=24:y=470:w=900:h=158:color=${BG}@0.58:t=fill[plate]`,
+        `[plate]drawtext=textfile='${tf('title_display.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=40:line_spacing=3:fontcolor=${INK}:x=${safe}:y=488[title]`,
+        `[title]drawtext=textfile='${tf('artist.txt')}':reload=1:fontfile='${FONT_DISPLAY}':fontsize=22:fontcolor=${INK_DIM}:x=${safe}:y=590[artist]`,
         `[artist]${brandMark}[vout]`,
         `[vout]split=2[vstream][vprev_in]`,
         previewBranch
@@ -906,24 +940,33 @@ class StreamManager extends EventEmitter {
       ? path.join(dataDir, 'warehouse-bg.jpg')
       : path.join(dataDir, 'bg.png');
     const coverInput = template === '5'
-      ? ['-f', 'lavfi', '-i', 'color=c=black:s=320x320:d=1']
-      : ['-loop', '1', '-i', path.join(dataDir, coverFile)];
+      ? ['-f', 'lavfi', '-i', 'color=c=black:s=320x320:r=30:d=1']
+      : ['-loop', '1', '-framerate', '30', '-i', path.join(dataDir, coverFile)];
 
     const inputArgs = [
       '-re', '-thread_queue_size', '1024',
       '-reconnect', '1', '-reconnect_at_eof', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '5',
       '-i', listenUrl,
-      '-loop', '1', '-i', bgFile,
+      '-loop', '1', '-framerate', '30', '-i', bgFile,
       ...coverInput,
     ];
+
+    const isYouTube = String(platform || '').toLowerCase() === 'youtube';
+    const videoBitrate = isYouTube ? '4000k' : '3000k';
+    const videoBuffer = isYouTube ? '8000k' : '6000k';
+    const audioBitrate = isYouTube ? '128k' : '160k';
 
     return [
       // The preview output is intentionally reused by the UI. FFmpeg otherwise
       // prompts when preview.jpg already exists; with stdin ignored by spawn,
       // that prompt immediately ends the entire multi-output broadcast process.
       '-y', '-nostdin', ...inputArgs, '-filter_complex', filterComplex, '-map', '[vstream]', '-map', '0:a',
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '3000k', '-maxrate', '3500k', '-bufsize', '12000k',
-      '-pix_fmt', 'yuv420p', '-g', '60', '-keyint_min', '60', '-c:a', 'aac', '-b:a', '160k', '-ar', '44100',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-profile:v', 'high', '-level', '3.1', '-bf', '2',
+      '-b:v', videoBitrate, '-minrate', videoBitrate, '-maxrate', videoBitrate, '-bufsize', videoBuffer,
+      '-x264-params', 'nal-hrd=cbr:force-cfr=1', '-r', '30', '-pix_fmt', 'yuv420p',
+      '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
+      '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709',
+      '-c:a', 'aac', '-b:a', audioBitrate, '-ar', '44100',
       '-f', 'flv', rtmpUrl, '-map', '[vprevout]', '-c:v', 'mjpeg', '-q:v', '5', '-pix_fmt', 'yuvj420p', '-f', 'image2', '-update', '1', path.join(dataDir, 'preview.jpg')
     ];
   }

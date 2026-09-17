@@ -93,6 +93,11 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
+# The renderer addresses these exact files with drawtext's `fontfile=` option.
+# Copy the build-time bundle so ffmpeg cannot silently fall back at runtime.
+COPY --from=builder /usr/share/fonts/truetype/syco /usr/share/fonts/truetype/syco
+RUN fc-cache -f
+
 # Copy node_modules from builder
 COPY --from=builder /app/node_modules ./node_modules
 

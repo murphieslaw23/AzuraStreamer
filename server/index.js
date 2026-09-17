@@ -69,7 +69,7 @@ let CFG = {
   // DB) because they're operator-controlled and rarely change.
   BRAND_NAME        : 'SYSTEM CORRUPT',
   BRAND_HOME        : 'SYCO23.ORG',
-  BRAND_TAGLINE     : '24/7 UNDGROUND MIX SETS ONLY',
+  BRAND_TAGLINE     : '24/7 UNDERGROUND MIX SETS ONLY',
   // Directory holding static brand images that get copied into each
   // stream's dataDir at start time. Template 5 references
   // `<dataDir>/warehouse-bg.jpg` from its filter graph, so it MUST be
@@ -233,7 +233,6 @@ async function poll() {
       if (!['live', 'starting', 'reconnecting'].includes(s.status) || s._restarting) continue;
 
       const np = transformed.find(d => d.stationId === s.stationId);
-      if (!np) continue;
 
       // Preflight dataDir before any IO. A missing directory means restart
       // would just produce a permanent failure — bail to error instead of
@@ -246,6 +245,27 @@ async function poll() {
         console.error(`[${s.id}] ${s.errorMessage}`);
         continue;
       }
+
+      // A frozen preview is usually the first reliable signal that ffmpeg's
+      // video graph has stopped advancing while the process is still alive.
+      // Allow startup one full preview interval, then require two consecutive
+      // stale polls before restarting to avoid flapping on a slow disk.
+      const previewWarm = s.lastStartedAt && Date.now() - s.lastStartedAt >= 30000;
+      if (s.status === 'live' && previewWarm) {
+        if (await streamer.isPreviewFresh(s.dataDir, 35000)) {
+          s._stalePreviewPolls = 0;
+        } else {
+          s._stalePreviewPolls = (s._stalePreviewPolls || 0) + 1;
+          if (s._stalePreviewPolls >= 2) {
+            s._stalePreviewPolls = 0;
+            logger.warn(`[${s.id}] Preview stopped advancing; restarting ffmpeg`);
+            await streamer.restartFfmpeg(s);
+            continue;
+          }
+        }
+      }
+
+      if (!np) continue;
 
       s.listeners = np.listeners;
       s.currentSong = np.nowPlaying;
