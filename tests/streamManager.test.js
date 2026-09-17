@@ -124,3 +124,17 @@ test('preview freshness rejects missing, empty, and stale broadcast frames', asy
     await fsp.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('ffmpeg progress parsing accepts the decimal speed values emitted by live broadcasts', () => {
+  const progress = [
+    'frame=    0 fps=0.0 q=0.0 size=       0kB time=N/A bitrate=N/A speed=N/A',
+    'frame=  424 fps=29.9 q=23.0 size=    6924kB time=00:00:14.13 bitrate=4012.3kbits/s speed=0.998x',
+  ].join('\r');
+
+  assert.deepEqual(StreamManager.parseFfmpegProgress(progress), {
+    fps: 30,
+    time: '00:00:14',
+    bitrate: '4012.3kbits/s',
+    speed: '0.998x',
+  });
+});

@@ -119,6 +119,28 @@ class StreamManager extends EventEmitter {
     return 'unknown';
   }
 
+  static parseFfmpegProgress(stderrBuf) {
+    const lines = String(stderrBuf || '').split(/[\r\n]+/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index];
+      if (!/frame=\s*\d+/.test(line)) continue;
+
+      const fps = line.match(/(?:^|\s)fps=\s*([\d.]+)/)?.[1];
+      const time = line.match(/(?:^|\s)time=(\d{2}:\d{2}:\d{2})(?:\.\d+)?/)?.[1];
+      const bitrate = line.match(/(?:^|\s)bitrate=\s*([\d.]+[A-Za-z]+\/s)/)?.[1];
+      const speed = line.match(/(?:^|\s)speed=\s*([\d.]+x)/)?.[1];
+      if (!fps || !time || !bitrate || !speed) continue;
+
+      return {
+        fps: Math.round(parseFloat(fps)),
+        time,
+        bitrate,
+        speed,
+      };
+    }
+    return null;
+  }
+
   updateConfig(newConfig) {
     this.config = { ...this.config, ...newConfig };
   }
@@ -450,14 +472,9 @@ class StreamManager extends EventEmitter {
         this.emit('stream:updated', this.getSummary(info));
       }
 
-      const statsMatch = s.match(/frame=\s*\d+\s+fps=\s*([\d\.]+)\s+.*time=(\d{2}:\d{2}:\d{2})\.\d{2}\s+bitrate=\s*([\d\.]+\w+\/s)\s+speed=\s*([\d\.]x)/);
-      if (statsMatch) {
-        info.stats = {
-          fps: Math.round(parseFloat(statsMatch[1])),
-          time: statsMatch[2],
-          bitrate: statsMatch[3],
-          speed: statsMatch[4]
-        };
+      const stats = StreamManager.parseFfmpegProgress(stderrBuf);
+      if (stats) {
+        info.stats = stats;
 
         const now = Date.now();
         if (!info._lastStatBroadcast || now - info._lastStatBroadcast > 3000) {
