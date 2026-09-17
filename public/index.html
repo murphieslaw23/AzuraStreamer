@@ -26,7 +26,7 @@
       </div>
     </div>
     <div class="header-actions">
-      <div id="connection-badge" class="badge badge--connecting">
+      <div id="connection-badge" class="badge badge--connecting" role="status" aria-live="polite">
         <span class="dot"></span> <span class="badge-text">Connecting…</span>
       </div>
       <button id="btn-settings" class="icon-button" aria-label="Open system settings">
@@ -71,7 +71,7 @@
       <div class="signal-rail">
         <span>Signal rail</span>
         <strong id="stream-status-banner" class="stream-status-label">Signal offline</strong>
-        <small>Output path dormant</small>
+        <small id="output-path-status">Output path dormant</small>
       </div>
     </header>
 
@@ -207,7 +207,7 @@
       <div class="form-group">
         <label class="form-label">AzuraCast API Key</label>
         <div style="display: flex; gap: 8px;">
-          <input name="AZURACAST_API_KEY" type="text" class="form-input" style="flex: 1;" required />
+          <input name="AZURACAST_API_KEY" type="password" class="form-input" style="flex: 1;" autocomplete="off" required />
           <button type="button" class="btn btn--ghost btn--sm btn-test-conn" data-platform="azuracast">Test</button>
         </div>
       </div>
@@ -261,7 +261,7 @@
           <p>2. Add this <strong>Authorized Redirect URI</strong> to your OAuth 2.0 Client ID:</p>
           <div style="display: flex; gap: 8px; background: #000; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
             <code class="display-redirect-uri" data-platform="youtube" style="flex: 1; color: var(--success); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Loading...</code>
-            <button type="button" class="btn-copy-uri" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 10px; font-weight: 700;">COPY</button>
+            <button type="button" class="btn-copy-uri" aria-label="Copy YouTube redirect URI" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 10px; font-weight: 700;">COPY</button>
           </div>
         </div>
       </div>
@@ -294,11 +294,11 @@
           Twitch API Setup Guide
         </label>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: flex; flex-direction: column; gap: 8px;">
-          <p>1. Create app at <a href="https://dev.twitch.tv/console" target="_blank" style="color: var(--primary);">Twitch Dev Console</a>.</p>
+          <p>1. Create app at <a href="https://dev.twitch.tv/console" target="_blank" rel="noopener" style="color: var(--primary);">Twitch Dev Console</a>.</p>
           <p>2. Add this <strong>OAuth Redirect URL</strong>:</p>
           <div style="display: flex; gap: 8px; background: #000; padding: 8px; border-radius: 4px; border: 1px solid var(--border);">
             <code class="display-redirect-uri" data-platform="twitch" style="flex: 1; color: var(--success); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Loading...</code>
-            <button type="button" class="btn-copy-uri" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 10px; font-weight: 700;">COPY</button>
+            <button type="button" class="btn-copy-uri" aria-label="Copy Twitch redirect URI" style="background: none; border: none; color: var(--primary); cursor: pointer; font-size: 10px; font-weight: 700;">COPY</button>
           </div>
         </div>
       </div>
@@ -321,10 +321,10 @@
           </div>
         </div>
       </div>
-      <div class="btn-group settings-save-bar" style="display: flex; gap: 12px;">
-        <button type="submit" class="btn btn--primary btn--full">Save Settings</button>
-      </div>
     </form>
+    <div class="btn-group settings-save-bar" style="display: flex; gap: 12px;">
+      <button type="submit" form="settings-form" class="btn btn--primary btn--full">Save Settings</button>
+    </div>
   </div>
 </div>
 

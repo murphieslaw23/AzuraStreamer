@@ -8,10 +8,16 @@ const TWITCH_AUTH_URL = 'https://id.twitch.tv/oauth2/authorize';
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const TWITCH_API_BASE = 'https://api.twitch.tv/helix';
 
-async function getAuthUrl(host) {
+function buildRedirectUri(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}/api/twitch/callback`;
+}
+
+async function getAuthUrl(req) {
   const settings = await db.getSettings();
   const clientId = settings.TWITCH_CLIENT_ID;
-  const redirectUri = `http://${host}/api/twitch/callback`;
+  const redirectUri = buildRedirectUri(req);
 
   if (!clientId) throw new Error('Twitch Client ID not configured in settings.');
 
@@ -26,11 +32,11 @@ async function getAuthUrl(host) {
   return `${TWITCH_AUTH_URL}?${params}`;
 }
 
-async function exchangeCode(code, host) {
+async function exchangeCode(code, req) {
   const settings = await db.getSettings();
   const clientId = settings.TWITCH_CLIENT_ID;
   const clientSecret = settings.TWITCH_CLIENT_SECRET;
-  const redirectUri = `http://${host}/api/twitch/callback`;
+  const redirectUri = buildRedirectUri(req);
 
   const res = await axios.post(TWITCH_TOKEN_URL, querystring.stringify({
     client_id: clientId,
@@ -129,6 +135,7 @@ async function testConnection() {
 }
 
 module.exports = {
+  buildRedirectUri,
   getAuthUrl,
   exchangeCode,
   getStreamKey,

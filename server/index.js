@@ -524,6 +524,40 @@ app.get('/api/youtube/test', async (req, res) => {
   }
 });
 
+// ── Twitch OAuth ────────────────────────────────────────────────────────────
+app.get('/api/twitch/auth', async (req, res) => {
+  try {
+    res.redirect(await twitch.getAuthUrl(req));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/twitch/callback', async (req, res) => {
+  const { code, error } = req.query;
+  if (error) return res.redirect('/?tw_error=' + encodeURIComponent(String(error)));
+  if (!code) return res.status(400).send('Missing ?code= from Twitch OAuth callback');
+
+  try {
+    const tokens = await twitch.exchangeCode(String(code), req);
+    if (!tokens.refresh_token) {
+      return res.redirect('/?tw_error=' + encodeURIComponent('Twitch returned no refresh token. Connect the account again.'));
+    }
+    await db.updateSetting('TWITCH_REFRESH_TOKEN', tokens.refresh_token);
+    return res.redirect('/?tw_connected=1');
+  } catch (err) {
+    return res.redirect('/?tw_error=' + encodeURIComponent(err.message));
+  }
+});
+
+app.get('/api/twitch/test', async (req, res) => {
+  try {
+    res.json({ ok: true, data: await twitch.testConnection() });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+});
+
 app.get('/api/streams', (req, res) => res.json({ ok: true, data: streamer.getAllSummaries() }));
 
 app.post('/api/streams/start', streamCreationLimiter, async (req, res) => {

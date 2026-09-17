@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login — AzuraStreamer</title>
+  <title>Login — SYCO23</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css">
@@ -12,7 +12,8 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      overflow: hidden;
+      padding: 24px 0;
+      overflow: auto;
     }
     .login-container {
       width: 100%;
@@ -25,42 +26,49 @@
       to { opacity: 1; transform: translateY(0); }
     }
     .login-card {
-      background: var(--bg-panel);
-      backdrop-filter: var(--glass);
+      position: relative;
+      background: var(--iron);
       border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
+      border-radius: 0;
       padding: 40px;
-      box-shadow: var(--shadow);
-      text-align: center;
+      box-shadow: 7px 7px 0 #0d0d0b;
+      text-align: left;
     }
+    .login-card::before { position: absolute; top: 0; left: 0; width: 5px; height: 72px; background: var(--signal); content: ""; }
     .login-logo {
-      width: 64px;
-      height: 64px;
-      margin: 0 auto 24px;
+      width: 38px;
+      height: 38px;
+      margin: 0 0 24px;
+      color: var(--bone);
     }
     .login-title {
-      font-size: 24px;
-      font-weight: 800;
-      margin-bottom: 8px;
-      background: linear-gradient(135deg, #a78bfa, #60a5fa);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      margin: 0 0 8px;
+      color: var(--bone);
+      font: 700 36px/.95 var(--display);
+      letter-spacing: -.02em;
+      text-transform: uppercase;
     }
     .login-sub {
-      font-size: 14px;
-      color: var(--text-muted);
+      color: var(--dust);
+      font: 500 10px/1.4 var(--mono);
+      letter-spacing: .14em;
+      text-transform: uppercase;
       margin-bottom: 32px;
     }
     .error-msg {
-      background: rgba(239, 68, 68, 0.1);
-      color: var(--danger);
+      background: var(--oil);
+      color: #db8c84;
       padding: 10px;
-      border-radius: var(--radius-sm);
+      border-radius: 0;
       font-size: 13px;
       margin-bottom: 20px;
-      border: 1px solid rgba(239, 68, 68, 0.2);
+      border: 1px solid var(--fault);
       display: none;
     }
+    .login-links { margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; gap: 20px; }
+    .login-links a { color: var(--dust); text-decoration: none; font-size: 12px; font-weight: 500; }
+    .login-links a:hover { color: var(--bone); }
+    @media (max-width: 430px) { .login-card { padding: 32px 24px; } }
   </style>
 </head>
 <body>
@@ -68,34 +76,25 @@
     <div class="login-card">
       <div class="login-logo">
         <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="16" cy="16" r="14" stroke="url(#gr1)" stroke-width="2.5"/>
-          <circle cx="16" cy="16" r="5" fill="url(#gr2)"/>
-          <defs>
-            <linearGradient id="gr1" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stop-color="#7c3aed"/><stop offset="100%" stop-color="#2563eb"/>
-            </linearGradient>
-            <radialGradient id="gr2" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#7c3aed"/>
-            </radialGradient>
-          </defs>
+          <path d="M16 2v28M23 7H9M26 16H6M23 25H9" stroke="currentColor" stroke-width="2.4"/>
         </svg>
       </div>
-      <h1 class="login-title">AzuraStreamer</h1>
+      <h1 class="login-title">SYCO23</h1>
       <p class="login-sub">Authorized Personnel Only</p>
       
-      <div id="login-error" class="error-msg"></div>
+      <div id="login-error" class="error-msg" role="alert"></div>
 
       <form id="login-form">
         <div class="form-group">
-          <label class="form-label" style="text-align: left;">System Password</label>
+          <label class="form-label" for="inp-password" style="text-align: left;">System Password</label>
           <input type="password" id="inp-password" class="form-input" placeholder="••••••••" required autofocus>
         </div>
         <button type="submit" class="btn btn--primary btn--full">Access Dashboard</button>
       </form>
 
-      <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border); display: flex; gap: 20px;">
-        <a href="/privacy.html" style="color: var(--text-dim); text-decoration: none; font-size: 12px; font-weight: 500; transition: color 0.2s;">Privacy Policy</a>
-        <a href="/terms.html" style="color: var(--text-dim); text-decoration: none; font-size: 12px; font-weight: 500; transition: color 0.2s;">Terms of Use</a>
+      <div class="login-links">
+        <a href="/privacy.html">Privacy Policy</a>
+        <a href="/terms.html">Terms of Use</a>
       </div>
     </div>
   </div>

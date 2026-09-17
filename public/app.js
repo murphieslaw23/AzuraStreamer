@@ -122,7 +122,7 @@ function updateDashboard() {
   }
   const npTitle = $('#np-title-display'); if (npTitle) npTitle.textContent = song.title || '—';
   const npArtist = $('#np-artist-display'); if (npArtist) npArtist.textContent = song.artist || '—';
-  const npFill = $('#np-fill-display'); if (npFill && song.duration > 0) npFill.style.width = `${Math.min(100, (song.elapsed / song.duration) * 100)}%`;
+  const npFill = $('#np-fill-display'); if (npFill) npFill.style.width = song.duration > 0 ? `${Math.min(100, (song.elapsed / song.duration) * 100)}%` : '0%';
   const npTime = $('#np-time-display'); if (npTime) npTime.textContent = song.duration ? `${fmtTime(song.elapsed)} / ${fmtTime(song.duration)}` : '';
 
   // Stream UI
@@ -131,6 +131,7 @@ function updateDashboard() {
   const preview = $('#preview-overlay');
   const btnStart = $('#btn-start');
   const btnStop = $('#btn-stop');
+  const outputPathStatus = $('#output-path-status');
 
   if (stream) {
     if (banner) { banner.hidden = false; banner.textContent = stream.status.toUpperCase() + (stream.errorMessage && stream.status !== 'live' ? `: ${stream.errorMessage}` : ''); banner.className = `stream-status-label status--${stream.status}`; }
@@ -138,6 +139,7 @@ function updateDashboard() {
     if (preview) preview.hidden = false;
     if (btnStart) btnStart.hidden = true;
     if (btnStop) btnStop.hidden = false;
+    if (outputPathStatus) outputPathStatus.textContent = stream.status === 'live' ? 'Output path active' : 'Output path arming';
 
     const sb = $('#stat-bitrate'); if (sb) sb.textContent = stream.stats?.bitrate || '0k';
     const sf = $('#stat-fps'); if (sf) sf.textContent = stream.stats?.fps || '0';
@@ -156,6 +158,7 @@ function updateDashboard() {
     if (banner) { banner.hidden = false; banner.textContent = 'Signal offline'; banner.className = 'stream-status-label'; }
     if (btnStart) btnStart.hidden = false;
     if (btnStop) btnStop.hidden = true;
+    if (outputPathStatus) outputPathStatus.textContent = 'Output path dormant';
     if (uptimeTimers[station.id]) { clearInterval(uptimeTimers[station.id]); delete uptimeTimers[station.id]; }
   }
 }
@@ -279,6 +282,12 @@ if (btnLogout) btnLogout.onclick = async () => {
 
 $('#btn-refresh').onclick = loadInitialData;
 
+const btnClearLogs = $('#btn-clear-logs');
+if (btnClearLogs) btnClearLogs.onclick = () => {
+  const logDisplay = $('#log-display');
+  if (logDisplay) logDisplay.replaceChildren();
+};
+
 /* ── Mobile overflow menu ──────────────────────────────────────────────────
    On phones (≤600px) the low-priority header items (logout, privacy, terms)
    are hidden via CSS and surfaced in a "···" popover. Build the popover
@@ -335,6 +344,10 @@ $('#btn-refresh').onclick = loadInitialData;
 
 let settingsOpener = null;
 
+function setPageInert(inert) {
+  $$('.site-header, .dashboard').forEach((element) => { element.inert = inert; });
+}
+
 function getModalFocusables(modal) {
   return $$('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])', modal)
     .filter(el => !el.hidden && el.offsetParent !== null);
@@ -346,6 +359,7 @@ function closeSettings() {
   modal.classList.remove('active');
   modal.setAttribute('aria-hidden', 'true');
   document.body.style.overflow = '';
+  setPageInert(false);
   settingsOpener?.focus();
 }
 
@@ -370,6 +384,7 @@ $('#btn-settings').onclick = (event) => {
     modal.setAttribute('aria-hidden', 'false');
     modal.classList.add('active');
     document.body.style.overflow = 'hidden';
+    setPageInert(true);
     setTimeout(() => {
       const first = getModalFocusables(modal)[0];
       if (first) first.focus();
@@ -410,6 +425,15 @@ if (btnConnectYt) {
     btnConnectYt.disabled = true;
     btnConnectYt.textContent = 'Redirecting…';
     window.location.href = '/api/youtube/auth';
+  };
+}
+
+const btnConnectTw = document.getElementById('btn-connect-tw');
+if (btnConnectTw) {
+  btnConnectTw.onclick = () => {
+    btnConnectTw.disabled = true;
+    btnConnectTw.textContent = 'Redirecting…';
+    window.location.href = '/api/twitch/auth';
   };
 }
 
@@ -455,6 +479,16 @@ $$('.btn-test-conn').forEach(btn => {
     params.delete('yt_error');
     const qs = params.toString();
     history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+  } else if (params.get('tw_connected') === '1') {
+    toast('Twitch account connected', 'success');
+    params.delete('tw_connected');
+    const qs = params.toString();
+    history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
+  } else if (params.get('tw_error')) {
+    toast('Twitch connect failed: ' + params.get('tw_error'), 'error');
+    params.delete('tw_error');
+    const qs = params.toString();
+    history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
   }
 })();
 
@@ -468,8 +502,10 @@ $('#settings-form').onsubmit = async (e) => {
       toast('Settings saved', 'success');
       closeSettings();
       loadInitialData();
+    } else {
+      toast(`Save failed: ${res.error || 'Settings were rejected'}`, 'error');
     }
-  } catch (err) { toast('Save failed', 'error'); }
+  } catch (err) { toast(`Save failed: ${err.message}`, 'error'); }
 };
 
 /* ── Socket.io ───────────────────────────────────────────────────────────── */

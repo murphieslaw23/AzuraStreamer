@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Setup — AzuraStreamer</title>
+  <title>Setup — SYCO23</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css">
@@ -13,46 +13,48 @@
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      background: radial-gradient(circle at top left, #1a1a2e, #16213e, #0f3460);
-      overflow: hidden;
+      padding: 24px 20px;
+      overflow: auto;
     }
     .setup-card {
+      position: relative;
       width: 100%;
       max-width: 440px;
-      padding: 50px;
-      background: rgba(255, 255, 255, 0.03);
-      backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 24px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      padding: 44px;
+      background: var(--iron);
+      border: 1px solid var(--line);
+      border-radius: 0;
+      box-shadow: 7px 7px 0 #0d0d0b;
       animation: fadeIn 0.6s ease-out;
     }
+    .setup-card::before { position: absolute; top: 0; left: 0; width: 5px; height: 72px; background: var(--signal); content: ""; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; justify-content: center; }
-    .logo-text { font-size: 24px; font-weight: 800; letter-spacing: -0.5px; color: #fff; }
-    h1 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 8px; text-align: center; }
-    p { color: rgba(255, 255, 255, 0.5); text-align: center; margin-bottom: 32px; font-size: 15px; line-height: 1.5; }
+    .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; color: var(--bone); }
+    .logo-text { color: var(--bone); font: 700 29px/.95 var(--display); letter-spacing: -.02em; }
+    h1 { margin: 0 0 8px; color: var(--bone); font: 700 36px/.95 var(--display); text-transform: uppercase; }
+    p { margin: 0 0 32px; color: var(--dust); font-size: 14px; line-height: 1.6; }
+    @media (max-width: 430px) { .setup-card { padding: 34px 24px; } }
   </style>
 </head>
 <body>
   <div class="setup-card">
     <div class="logo">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5"><path d="M12 2v20M17 5H7M19 12H5M17 19H7"/></svg>
-      <span class="logo-text">AzuraStreamer</span>
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M17 5H7M19 12H5M17 19H7"/></svg>
+      <span class="logo-text">SYCO23</span>
     </div>
     <h1>Welcome</h1>
     <p>Please set your administrator password to initialize the application.</p>
     
     <form id="setup-form">
       <div class="form-group">
-        <label class="form-label">Admin Password</label>
+        <label class="form-label" for="inp-password">Admin Password</label>
         <input id="inp-password" type="password" class="form-input" placeholder="Min 8 characters" required minlength="8" />
       </div>
       <div class="form-group">
-        <label class="form-label">Confirm Password</label>
+        <label class="form-label" for="inp-confirm">Confirm Password</label>
         <input id="inp-confirm" type="password" class="form-input" placeholder="Repeat your password" required minlength="8" />
       </div>
-      <div id="setup-error" class="badge badge--error" style="width: 100%; margin-bottom: 20px; justify-content: center;" hidden></div>
+      <div id="setup-error" class="badge badge--error" role="alert" style="width: 100%; margin-bottom: 20px; justify-content: center;" hidden></div>
       <button type="submit" class="btn btn--primary btn--full">Complete Setup</button>
     </form>
   </div>
